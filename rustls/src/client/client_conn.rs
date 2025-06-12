@@ -31,6 +31,8 @@ use crate::unbuffered::{EncryptError, TransmitTlsData};
 use crate::{DistinguishedName, crypto};
 use crate::{KeyLog, WantsVersions, compress, sign, verify, versions};
 
+use crate::msgs::tpm_attestation::TpmAttestationRequest;
+
 /// A trait for the ability to store client session data, so that sessions
 /// can be resumed in future connections.
 ///
@@ -281,6 +283,9 @@ pub struct ClientConfig {
 
     /// How to offer Encrypted Client Hello (ECH). The default is to not offer ECH.
     pub(super) ech_mode: Option<EchMode>,
+
+    /// TPM attestation request.
+    pub tpm_attestation_request: Option<TpmAttestationRequest>,
 }
 
 impl ClientConfig {
@@ -441,6 +446,12 @@ impl ClientConfig {
         self.time_provider
             .current_time()
             .ok_or(Error::FailedToGetCurrentTime)
+    }
+
+    /// Enable TPM attestation with the given nonce and PCR selection
+    pub fn with_tpm_attestation_request(mut self, nonce: Vec<u8>, pcr_selection: Vec<u8>) -> Self {
+        self.tpm_attestation_request = Some(TpmAttestationRequest::new(nonce, pcr_selection));
+        self
     }
 }
 

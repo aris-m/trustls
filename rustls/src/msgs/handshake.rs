@@ -31,6 +31,8 @@ use crate::sync::Arc;
 use crate::verify::DigitallySignedStruct;
 use crate::x509::wrap_in_sequence;
 
+use crate::msgs::tpm_attestation::TpmAttestationRequest;
+
 /// Create a newtype wrapper around a given type.
 ///
 /// This is used to create newtypes for the various TLS message types which is used to wrap
@@ -724,6 +726,7 @@ pub(crate) enum ClientExtension {
     EncryptedClientHello(EncryptedClientHello),
     EncryptedClientHelloOuterExtensions(Vec<ExtensionType>),
     AuthorityNames(Vec<DistinguishedName>),
+    TpmAttestationRequest(TpmAttestationRequest),
     Unknown(UnknownExtension),
 }
 
@@ -754,6 +757,7 @@ impl ClientExtension {
                 ExtensionType::EncryptedClientHelloOuterExtensions
             }
             Self::AuthorityNames(_) => ExtensionType::CertificateAuthorities,
+            Self::TpmAttestationRequest(_) => ExtensionType::TpmAttestationRequest,
             Self::Unknown(r) => r.typ,
         }
     }
@@ -787,6 +791,7 @@ impl Codec<'_> for ClientExtension {
             Self::EncryptedClientHello(r) => r.encode(nested.buf),
             Self::EncryptedClientHelloOuterExtensions(r) => r.encode(nested.buf),
             Self::AuthorityNames(r) => r.encode(nested.buf),
+            Self::TpmAttestationRequest(r) => r.encode(nested.buf),
             Self::Unknown(r) => r.encode(nested.buf),
         }
     }
@@ -841,6 +846,9 @@ impl Codec<'_> for ClientExtension {
                 }
                 items
             }),
+            ExtensionType::TpmAttestationRequest => {
+                Self::TpmAttestationRequest(TpmAttestationRequest::read(&mut sub)?)
+            },
             _ => Self::Unknown(UnknownExtension::read(typ, &mut sub)),
         };
 
