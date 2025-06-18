@@ -31,7 +31,7 @@ use crate::sync::Arc;
 use crate::verify::DigitallySignedStruct;
 use crate::x509::wrap_in_sequence;
 
-use crate::msgs::tpm_attestation::TpmAttestationRequest;
+use crate::msgs::tpm_attestation::{ TpmAttestationRequest, TpmAttestationResponse};
 
 /// Create a newtype wrapper around a given type.
 ///
@@ -912,6 +912,8 @@ pub(crate) enum ServerExtension {
     TransportParametersDraft(Vec<u8>),
     EarlyData,
     EncryptedClientHello(ServerEncryptedClientHello),
+    TpmAttestationRequest(TpmAttestationRequest),
+    TpmAttestationResponse(TpmAttestationResponse),
     Unknown(UnknownExtension),
 }
 
@@ -934,6 +936,8 @@ impl ServerExtension {
             Self::TransportParametersDraft(_) => ExtensionType::TransportParametersDraft,
             Self::EarlyData => ExtensionType::EarlyData,
             Self::EncryptedClientHello(_) => ExtensionType::EncryptedClientHello,
+            Self::TpmAttestationRequest(_) => ExtensionType::TpmAttestationRequest,
+            Self::TpmAttestationResponse(_) => ExtensionType::TpmAttestationResponse,
             Self::Unknown(r) => r.typ,
         }
     }
@@ -962,6 +966,8 @@ impl Codec<'_> for ServerExtension {
                 nested.buf.extend_from_slice(r);
             }
             Self::EncryptedClientHello(r) => r.encode(nested.buf),
+            Self::TpmAttestationRequest(ref r) => r.encode(nested.buf),
+            Self::TpmAttestationResponse(ref r) => r.encode(nested.buf),
             Self::Unknown(r) => r.encode(nested.buf),
         }
     }
@@ -999,6 +1005,12 @@ impl Codec<'_> for ServerExtension {
             ExtensionType::EarlyData => Self::EarlyData,
             ExtensionType::EncryptedClientHello => {
                 Self::EncryptedClientHello(ServerEncryptedClientHello::read(&mut sub)?)
+            }
+            ExtensionType::TpmAttestationRequest => {
+                Self::TpmAttestationRequest(TpmAttestationRequest::read(&mut sub)?)
+            }
+            ExtensionType::TpmAttestationResponse => {
+                Self::TpmAttestationResponse(TpmAttestationResponse::read(&mut sub)?)
             }
             _ => Self::Unknown(UnknownExtension::read(typ, &mut sub)),
         };
@@ -1275,6 +1287,14 @@ impl ClientHelloPayload {
             ClientExtension::AuthorityNames(ext) => Some(ext),
             _ => unreachable!("extension type checked"),
         }
+    }
+
+    pub(crate) fn get_tpm_attestation_request(&self) -> Option<&TpmAttestationRequest> {
+        self.find_extension(ExtensionType::TpmAttestationRequest)
+            .and_then(|ext| match ext {
+                ClientExtension::TpmAttestationRequest(req) => Some(req),
+                _ => None,
+            })
     }
 }
 

@@ -427,7 +427,7 @@ mod sync {
 }
 
 #[macro_use]
-mod msgs;
+pub mod msgs;
 mod common_state;
 pub mod compress;
 mod conn;
@@ -627,7 +627,7 @@ pub mod server {
     mod common;
     pub(crate) mod handy;
     mod hs;
-    mod server_conn;
+    pub mod server_conn;
     #[cfg(test)]
     mod test;
     #[cfg(feature = "tls12")]
@@ -713,3 +713,5 @@ mod hash_map {
     #[cfg(all(not(feature = "std"), feature = "hashbrown"))]
     pub(crate) use hashbrown::hash_map::Entry;
 }
+
+pub use crate::msgs::tpm_attestation::{TpmAttestationRequest, TpmAttestationResponse, ServerTpmAttestation, TpmReportGenerator};
