@@ -48,6 +48,8 @@ use crate::tls13::{
 use crate::verify::{self, DigitallySignedStruct};
 use crate::{ConnectionTrafficSecrets, KeyLog, compress, crypto};
 
+use crate::msgs::tpm_attestation::{TpmAttestationRequest, TpmAttestationResponse};
+
 // Extensions we expect in plaintext in the ServerHello.
 static ALLOWED_PLAINTEXT_EXTS: &[ExtensionType] = &[
     ExtensionType::KeyShare,
@@ -424,7 +426,13 @@ fn validate_encrypted_extensions(
         ));
     }
 
-    if hello.server_sent_unsolicited_extensions(exts, &[]) {
+    let mut solicited_extensions = vec![];
+    if hello.sent_extensions.contains(&ExtensionType::TpmAttestationRequest) {
+        solicited_extensions.push(ExtensionType::TpmAttestationRequest);
+        solicited_extensions.push(ExtensionType::TpmAttestationResponse);
+    }
+
+    if hello.server_sent_unsolicited_extensions(exts, &solicited_extensions) {
         return Err(common.send_fatal_alert(
             AlertDescription::UnsupportedExtension,
             PeerMisbehaved::UnsolicitedEncryptedExtension,
@@ -439,6 +447,26 @@ fn validate_encrypted_extensions(
                 AlertDescription::UnsupportedExtension,
                 PeerMisbehaved::DisallowedEncryptedExtension,
             ));
+        }
+
+        match ext {
+            ServerExtension::TpmAttestationResponse(_) => {
+                if !hello.sent_extensions.contains(&ExtensionType::TpmAttestationRequest) {
+                    return Err(common.send_fatal_alert(
+                        AlertDescription::UnsupportedExtension,
+                        PeerMisbehaved::UnsolicitedEncryptedExtension,
+                    ));
+                }
+            }
+            ServerExtension::TpmAttestationRequest(_) => {
+                if !hello.sent_extensions.contains(&ExtensionType::TpmAttestationRequest) {
+                    return Err(common.send_fatal_alert(
+                        AlertDescription::UnsupportedExtension,
+                        PeerMisbehaved::UnsolicitedEncryptedExtension,
+                    ));
+                }
+            }
+            _ => {}
         }
     }
 
@@ -477,6 +505,40 @@ impl State<ClientConnectionData> for ExpectEncryptedExtensions {
         hs::process_alpn_protocol(cx.common, &self.hello.alpn_protocols, exts.alpn_protocol())?;
         hs::process_client_cert_type_extension(cx.common, &self.config, exts.client_cert_type())?;
         hs::process_server_cert_type_extension(cx.common, &self.config, exts.server_cert_type())?;
+
+        let client_sent_tpm_request = self.hello.sent_extensions
+            .contains(&ExtensionType::TpmAttestationRequest);
+
+        for ext in exts.iter() {
+            match ext {
+                ServerExtension::TpmAttestationResponse(tpm_response) => {
+                    if client_sent_tpm_request {
+                        debug!("Received TPM attestation response from server");
+                        debug!("Server TPM report length: {}", tpm_response.report.len());
+                        debug!("Server TPM signature length: {}", tpm_response.signature.len());
+                        debug!("Server TPM AK cert length: {}", tpm_response.ak_cert.len());
+                    } else {
+                        return Err(cx.common.send_fatal_alert(
+                            AlertDescription::UnsupportedExtension,
+                            PeerMisbehaved::UnsolicitedEncryptedExtension,
+                        ));
+                    }
+                }
+                ServerExtension::TpmAttestationRequest(tpm_request) => {
+                    if client_sent_tpm_request {
+                        debug!("Received TPM attestation request from server for mutual attestation");
+                        debug!("Server nonce length: {}", tpm_request.nonce.len());
+                        debug!("Server PCR selection: {:?}", tpm_request.pcr_selection);
+                    } else {
+                        return Err(cx.common.send_fatal_alert(
+                            AlertDescription::UnsupportedExtension,
+                            PeerMisbehaved::UnsolicitedEncryptedExtension,
+                        ));
+                    }
+                }
+                _ => {},
+            }
+        }
 
         let ech_retry_configs = match (cx.data.ech_status, exts.server_ech_extension()) {
             // If we didn't offer ECH, or ECH was accepted, but the server sent an ECH encrypted

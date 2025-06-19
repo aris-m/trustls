@@ -627,6 +627,7 @@ pub mod server {
     mod common;
     pub(crate) mod handy;
     mod hs;
+    /// Module for server connection handling.
     pub mod server_conn;
     #[cfg(test)]
     mod test;
