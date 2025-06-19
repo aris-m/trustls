@@ -48,8 +48,6 @@ use crate::tls13::{
 use crate::verify::{self, DigitallySignedStruct};
 use crate::{ConnectionTrafficSecrets, KeyLog, compress, crypto};
 
-use crate::msgs::tpm_attestation::{TpmAttestationRequest, TpmAttestationResponse};
-
 // Extensions we expect in plaintext in the ServerHello.
 static ALLOWED_PLAINTEXT_EXTS: &[ExtensionType] = &[
     ExtensionType::KeyShare,
