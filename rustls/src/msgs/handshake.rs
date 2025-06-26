@@ -1694,6 +1694,7 @@ pub(crate) const CERTIFICATE_MAX_SIZE_LIMIT: usize = 0x1_0000;
 #[derive(Debug)]
 pub(crate) enum CertificateExtension<'a> {
     CertificateStatus(CertificateStatus<'a>),
+    TpmAttestationResponse(TpmAttestationResponse),
     Unknown(UnknownExtension),
 }
 
@@ -1701,6 +1702,7 @@ impl CertificateExtension<'_> {
     pub(crate) fn ext_type(&self) -> ExtensionType {
         match self {
             Self::CertificateStatus(_) => ExtensionType::StatusRequest,
+            Self::TpmAttestationResponse(_) => ExtensionType::TpmAttestationResponse,
             Self::Unknown(r) => r.typ,
         }
     }
@@ -1715,6 +1717,7 @@ impl CertificateExtension<'_> {
     pub(crate) fn into_owned(self) -> CertificateExtension<'static> {
         match self {
             Self::CertificateStatus(st) => CertificateExtension::CertificateStatus(st.into_owned()),
+            Self::TpmAttestationResponse(resp) => CertificateExtension::TpmAttestationResponse(resp),
             Self::Unknown(unk) => CertificateExtension::Unknown(unk),
         }
     }
@@ -1727,6 +1730,7 @@ impl<'a> Codec<'a> for CertificateExtension<'a> {
         let nested = LengthPrefixedBuffer::new(ListLength::U16, bytes);
         match self {
             Self::CertificateStatus(r) => r.encode(nested.buf),
+            Self::TpmAttestationResponse(r) => r.encode(nested.buf),
             Self::Unknown(r) => r.encode(nested.buf),
         }
     }

@@ -29,9 +29,9 @@ use crate::time_provider::TimeProvider;
 use crate::unbuffered::{EncryptError, TransmitTlsData};
 #[cfg(doc)]
 use crate::{DistinguishedName, crypto};
-use crate::{KeyLog, WantsVersions, compress, sign, verify, versions};
+use crate::{compress, sign, verify, versions, KeyLog, TpmAttestationResponse, WantsVersions};
 
-use crate::msgs::tpm_attestation::TpmAttestationRequest;
+use crate::msgs::tpm_attestation::{TpmAttestationRequest, ClientTpmConfig};
 
 /// A trait for the ability to store client session data, so that sessions
 /// can be resumed in future connections.
@@ -284,8 +284,8 @@ pub struct ClientConfig {
     /// How to offer Encrypted Client Hello (ECH). The default is to not offer ECH.
     pub(super) ech_mode: Option<EchMode>,
 
-    /// TPM attestation request.
-    pub tpm_attestation_request: Option<TpmAttestationRequest>,
+    /// TPM attestation configuration including request and verification/generation capabilities
+    pub tpm_config: Option<ClientTpmConfig>,
 }
 
 impl ClientConfig {
@@ -449,8 +449,19 @@ impl ClientConfig {
     }
 
     /// Enable TPM attestation with the given nonce and PCR selection
-    pub fn with_tpm_attestation_request(mut self, nonce: Vec<u8>, pcr_selection: Vec<u8>) -> Self {
-        self.tpm_attestation_request = Some(TpmAttestationRequest::new(nonce, pcr_selection));
+    pub fn with_tpm_attestation(
+        mut self, 
+        nonce: Vec<u8>, 
+        pcr_selection: Vec<u8>,
+        verifier: Arc<dyn crate::msgs::tpm_attestation::TpmReportVerifier>,
+        report_generator: Arc<dyn crate::msgs::tpm_attestation::TpmReportGenerator>
+    ) -> Self {
+        let request = TpmAttestationRequest::new(nonce, pcr_selection);
+        self.tpm_config = Some(ClientTpmConfig {
+            request,
+            verifier,
+            report_generator,
+        });
         self
     }
 }
@@ -1045,6 +1056,8 @@ impl std::error::Error for EarlyDataError {}
 pub struct ClientConnectionData {
     pub(super) early_data: EarlyData,
     pub(super) ech_status: EchStatus,
+    /// If the client is configured to use TPM attestation, this contains the request
+    pub tpm_attestation_response: Option<TpmAttestationResponse>,
 }
 
 impl ClientConnectionData {
@@ -1052,6 +1065,7 @@ impl ClientConnectionData {
         Self {
             early_data: EarlyData::new(),
             ech_status: EchStatus::NotOffered,
+            tpm_attestation_response: None,
         }
     }
 }
