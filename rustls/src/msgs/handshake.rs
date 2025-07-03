@@ -1695,6 +1695,7 @@ pub(crate) const CERTIFICATE_MAX_SIZE_LIMIT: usize = 0x1_0000;
 pub(crate) enum CertificateExtension<'a> {
     CertificateStatus(CertificateStatus<'a>),
     Unknown(UnknownExtension),
+    AttestationResponse(AttestationResponse),
 }
 
 impl CertificateExtension<'_> {
@@ -1702,6 +1703,7 @@ impl CertificateExtension<'_> {
         match self {
             Self::CertificateStatus(_) => ExtensionType::StatusRequest,
             Self::Unknown(r) => r.typ,
+            Self::AttestationResponse(_) => ExtensionType::AttestationResponse,
         }
     }
 
@@ -1716,6 +1718,9 @@ impl CertificateExtension<'_> {
         match self {
             Self::CertificateStatus(st) => CertificateExtension::CertificateStatus(st.into_owned()),
             Self::Unknown(unk) => CertificateExtension::Unknown(unk),
+            Self::AttestationResponse(resp) => {
+                CertificateExtension::AttestationResponse(resp)
+            }
         }
     }
 }
@@ -1728,6 +1733,7 @@ impl<'a> Codec<'a> for CertificateExtension<'a> {
         match self {
             Self::CertificateStatus(r) => r.encode(nested.buf),
             Self::Unknown(r) => r.encode(nested.buf),
+            Self::AttestationResponse(r) => r.encode(nested.buf),
         }
     }
 
@@ -1740,6 +1746,10 @@ impl<'a> Codec<'a> for CertificateExtension<'a> {
             ExtensionType::StatusRequest => {
                 let st = CertificateStatus::read(&mut sub)?;
                 Self::CertificateStatus(st)
+            }
+            ExtensionType::AttestationResponse => {
+                let response = AttestationResponse::read(&mut sub)?;
+                Self::AttestationResponse(response)
             }
             _ => Self::Unknown(UnknownExtension::read(typ, &mut sub)),
         };

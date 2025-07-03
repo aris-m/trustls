@@ -127,6 +127,7 @@ pub struct ClientAttestationConfig {
 pub struct ServerAttestationConfig {
     pub request: AttestationRequest,
     pub report_generator: Arc<dyn AttestationReportGenerator>,
+    pub verifier: Arc<dyn AttestationReportVerifier>,
 }
 
 impl AttestationRequest {

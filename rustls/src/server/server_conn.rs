@@ -33,7 +33,7 @@ use crate::sync::Arc;
 use crate::time_provider::DefaultTimeProvider;
 use crate::time_provider::TimeProvider;
 use crate::vecbuf::ChunkVecBuffer;
-use crate::{DistinguishedName, KeyLog, WantsVersions, compress, sign, verify, versions};
+use crate::{compress, sign, verify, versions, AttestationRequest, DistinguishedName, KeyLog, WantsVersions};
 
 use crate::attestation::ServerAttestationConfig;
 
@@ -1223,6 +1223,7 @@ pub struct ServerConnectionData {
     pub(super) received_resumption_data: Option<Vec<u8>>,
     pub(super) resumption_data: Vec<u8>,
     pub(super) early_data: EarlyDataState,
+    pub(super) client_attestation_request: Option<AttestationRequest>,
 }
 
 impl ServerConnectionData {

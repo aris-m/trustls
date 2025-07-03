@@ -6,7 +6,7 @@ use crate::log::{debug, trace};
 use crate::msgs::enums::ExtensionType;
 use crate::msgs::handshake::{CertificateChain, DistinguishedName, ProtocolName, ServerExtension};
 use crate::sync::Arc;
-use crate::{SignatureScheme, compress, sign};
+use crate::{compress, sign, AttestationRequest, AttestationResponse, ClientAttestationConfig, Error, SignatureScheme};
 
 #[derive(Debug)]
 pub(super) struct ServerCertDetails<'a> {
@@ -78,6 +78,7 @@ pub(super) enum ClientAuthDetails {
         signer: Box<dyn sign::Signer>,
         auth_context_tls13: Option<Vec<u8>>,
         compressor: Option<&'static dyn compress::CertCompressor>,
+        attestation_response: Option<AttestationResponse>,
     },
 }
 
@@ -88,7 +89,10 @@ impl ClientAuthDetails {
         sigschemes: &[SignatureScheme],
         auth_context_tls13: Option<Vec<u8>>,
         compressor: Option<&'static dyn compress::CertCompressor>,
-    ) -> Self {
+        // Add attestation parameters
+        attestation_config: Option<&ClientAttestationConfig>,
+        server_attestation_request: Option<&AttestationRequest>,
+    ) -> Result<Self, Error> {
         let acceptable_issuers = canames
             .unwrap_or_default()
             .iter()
@@ -98,16 +102,33 @@ impl ClientAuthDetails {
         if let Some(certkey) = resolver.resolve(&acceptable_issuers, sigschemes) {
             if let Some(signer) = certkey.key.choose_scheme(sigschemes) {
                 debug!("Attempting client auth");
-                return Self::Verify {
+                
+                // Generate attestation response if both configs are available
+                let attestation_response = if let (Some(config), Some(server_request)) = 
+                    (attestation_config, server_attestation_request) {
+                    if config.report_generator.get_attestation_type() == server_request.attestation_type {
+                        Some(config.report_generator.generate_report(
+                            &server_request.nonce,
+                            &server_request.data
+                        )?)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                return Ok(Self::Verify {
                     certkey,
                     signer,
                     auth_context_tls13,
                     compressor,
-                };
+                    attestation_response, // Add this field
+                });
             }
         }
 
         debug!("Client auth requested but no cert/sigscheme available");
-        Self::Empty { auth_context_tls13 }
+        Ok(Self::Empty { auth_context_tls13 })
     }
 }

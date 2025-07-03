@@ -29,7 +29,7 @@ use crate::time_provider::TimeProvider;
 use crate::unbuffered::{EncryptError, TransmitTlsData};
 #[cfg(doc)]
 use crate::{DistinguishedName, crypto};
-use crate::{compress, sign, verify, versions, KeyLog, WantsVersions};
+use crate::{compress, sign, verify, versions, AttestationRequest, KeyLog, WantsVersions};
 
 use crate::attestation::{ClientAttestationConfig, AttestationResponse};
 
@@ -1045,7 +1045,7 @@ pub struct ClientConnectionData {
     pub(super) early_data: EarlyData,
     pub(super) ech_status: EchStatus,
     /// If the client is configured to use TPM attestation, this contains the request
-    pub attestation_response: Option<AttestationResponse>,
+    pub(super) server_attestation_request: Option<AttestationRequest>,
 }
 
 impl ClientConnectionData {
@@ -1053,7 +1053,7 @@ impl ClientConnectionData {
         Self {
             early_data: EarlyData::new(),
             ech_status: EchStatus::NotOffered,
-            attestation_response: None,
+            server_attestation_request: None,
         }
     }
 }

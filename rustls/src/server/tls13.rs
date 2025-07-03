@@ -21,8 +21,7 @@ use crate::log::{debug, trace, warn};
 use crate::msgs::codec::{Codec, Reader};
 use crate::msgs::enums::KeyUpdateRequest;
 use crate::msgs::handshake::{
-    CERTIFICATE_MAX_SIZE_LIMIT, CertificateChain, CertificatePayloadTls13, HandshakeMessagePayload,
-    HandshakePayload, NewSessionTicketExtension, NewSessionTicketPayloadTls13,
+    CertificateChain, CertificateExtension, CertificatePayloadTls13, HandshakeMessagePayload, HandshakePayload, NewSessionTicketExtension, NewSessionTicketPayloadTls13, CERTIFICATE_MAX_SIZE_LIMIT
 };
 use crate::msgs::message::{Message, MessagePayload};
 use crate::msgs::persist;
@@ -35,7 +34,7 @@ use crate::tls13::key_schedule::{
 use crate::tls13::{
     Tls13CipherSuite, construct_client_verify_message, construct_server_verify_message,
 };
-use crate::{ConnectionTrafficSecrets, compress, rand, verify};
+use crate::{compress, rand, verify, AttestationResponse, AttestationType, ConnectionTrafficSecrets, ServerAttestationConfig};
 
 mod client_hello {
     use super::*;
@@ -1045,19 +1044,76 @@ impl State<ServerConnectionData> for ExpectCertificate {
             HandshakePayload::CertificateTls13
         )?;
 
-        // We don't send any CertificateRequest extensions, so any extensions
-        // here are illegal.
-        if certp.any_entry_has_extension() {
-            return Err(PeerMisbehaved::UnsolicitedCertExtension.into());
+        debug!("Received client certificate message");
+
+        // Extract attestation response from certificate extensions if present
+        let mut client_attestation_response: Option<AttestationResponse> = None;
+
+        let expects_attestation = self.config.attestation_config.is_some();
+        
+        // Look for attestation response in the first certificate entry (end entity)
+        if let Some(first_entry) = certp.entries.first() {
+            
+            for (i, ext) in first_entry.exts.iter().enumerate() {
+                match ext {
+                    CertificateExtension::AttestationResponse(response) => {
+                        debug!("  Client attestation type: {:?}", response.attestation_type);
+                        debug!("  Client report length: {}", response.report.len());
+                        client_attestation_response = Some(response.clone());
+                        break;
+                    }
+                    CertificateExtension::Unknown(unk) => {
+                        debug!("  Unknown extension type: {:?}", unk.typ);
+                    }
+                    _ => {
+                        debug!("  Other known extension");
+                    }
+                }
+            }
+        } else {
+            debug!("No certificate entries found");
+        }
+
+        // If we have an attestation config and received a client attestation response, verify it
+        if let (Some(attestation_config), Some(client_response)) = 
+            (&self.config.attestation_config, &client_attestation_response) {
+            
+            // Check if the attestation type matches what we requested
+            if attestation_config.request.attestation_type == client_response.attestation_type {
+                // Verify the client's attestation response using the configured verifier
+                let verification_result = attestation_config.verifier.verify_report(
+                    client_response,
+                    &attestation_config.request.nonce
+                )?;
+                
+                if !verification_result {
+                    debug!("Client attestation verification FAILED");
+                    return Err(cx.common.send_fatal_alert(
+                        AlertDescription::BadCertificate,
+                        Error::InvalidAttestation,
+                    ));
+                }
+                
+                debug!("Client attestation verification SUCCESSFUL");
+            } else {
+                debug!("Client attestation type mismatch, expected: {:?}, got: {:?}", 
+                       attestation_config.request.attestation_type,
+                       client_response.attestation_type);
+                debug!("Continuing despite attestation type mismatch");
+            }
+        } else if expects_attestation && client_attestation_response.is_none() {
+            debug!("Expected client attestation response but none received");
+            if let Some(attestation_config) = &self.config.attestation_config {
+                debug!("  Server requested attestation type: {:?}", attestation_config.request.attestation_type);
+                debug!("  Server nonce length: {}", attestation_config.request.nonce.len());
+            }
         }
 
         let client_cert = certp.into_certificate_chain();
-
         let mandatory = self
             .config
             .verifier
             .client_auth_mandatory();
-
         let Some((end_entity, intermediates)) = client_cert.split_first() else {
             if !mandatory {
                 debug!("client auth requested but no certificate supplied");
@@ -1070,15 +1126,14 @@ impl State<ServerConnectionData> for ExpectCertificate {
                     send_tickets: self.send_tickets,
                 }));
             }
-
             return Err(cx.common.send_fatal_alert(
                 AlertDescription::CertificateRequired,
                 Error::NoCertificatesPresented,
             ));
         };
 
+        // Proceed with normal certificate validation
         let now = self.config.current_time()?;
-
         self.config
             .verifier
             .verify_client_cert(end_entity, intermediates, now)
@@ -1099,6 +1154,49 @@ impl State<ServerConnectionData> for ExpectCertificate {
 
     fn into_owned(self: Box<Self>) -> hs::NextState<'static> {
         self
+    }
+}
+
+fn verify_client_attestation(
+    response: &AttestationResponse,
+    expected_nonce: &[u8],
+    config: &ServerAttestationConfig,
+) -> Result<bool, Error> {
+    // This is a placeholder implementation
+    // You should implement proper verification logic based on your attestation type
+    
+    match response.attestation_type {
+        AttestationType::TPM => {
+            // Implement TPM-specific verification
+            // For now, we'll do basic nonce verification like in your mock implementation
+            if response.report.len() >= expected_nonce.len() {
+                let report_nonce = &response.report[..expected_nonce.len().min(32)];
+                let verification_result = report_nonce == &expected_nonce[..expected_nonce.len().min(32)];
+                
+                debug!("Client TPM verification result: {}", verification_result);
+                debug!("Report size: {}, Signature size: {}, Cert size: {}", 
+                       response.report.len(), response.signature.len(), response.certificate_chain.len());
+                
+                Ok(verification_result)
+            } else {
+                debug!("Client report too small");
+                Ok(false)
+            }
+        }
+        AttestationType::SGX => {
+            // Implement SGX-specific verification
+            debug!("SGX attestation verification not implemented");
+            Ok(false)
+        }
+        AttestationType::SEV => {
+            // Implement SEV-specific verification
+            debug!("SEV attestation verification not implemented");
+            Ok(false)
+        }
+        _ => {
+            debug!("Attestation type: {:?}", response.attestation_type);
+            Ok(false)
+        }
     }
 }
 

@@ -28,10 +28,7 @@ use crate::msgs::ccs::ChangeCipherSpecPayload;
 use crate::msgs::codec::{Codec, Reader};
 use crate::msgs::enums::{ExtensionType, KeyUpdateRequest};
 use crate::msgs::handshake::{
-    CERTIFICATE_MAX_SIZE_LIMIT, CertificatePayloadTls13, ClientExtension, EchConfigPayload,
-    HandshakeMessagePayload, HandshakePayload, HasServerExtensions, KeyShareEntry,
-    NewSessionTicketPayloadTls13, PresharedKeyIdentity, PresharedKeyOffer, ServerExtension,
-    ServerHelloPayload,
+    CertificateEntry, CertificateExtension, CertificatePayloadTls13, ClientExtension, EchConfigPayload, HandshakeMessagePayload, HandshakePayload, HasServerExtensions, KeyShareEntry, NewSessionTicketPayloadTls13, PresharedKeyIdentity, PresharedKeyOffer, ServerExtension, ServerHelloPayload, CERTIFICATE_MAX_SIZE_LIMIT
 };
 use crate::msgs::message::{Message, MessagePayload};
 use crate::msgs::persist;
@@ -46,7 +43,7 @@ use crate::tls13::{
     Tls13CipherSuite, construct_client_verify_message, construct_server_verify_message,
 };
 use crate::verify::{self, DigitallySignedStruct};
-use crate::{ConnectionTrafficSecrets, KeyLog, compress, crypto};
+use crate::{compress, crypto, AttestationRequest, AttestationResponse, ConnectionTrafficSecrets, KeyLog};
 
 // Extensions we expect in plaintext in the ServerHello.
 static ALLOWED_PLAINTEXT_EXTS: &[ExtensionType] = &[
@@ -498,6 +495,8 @@ impl State<ClientConnectionData> for ExpectEncryptedExtensions {
         let client_sent_attestation_request = self.hello.sent_extensions
             .contains(&ExtensionType::AttestationRequest);
 
+        let mut server_attestation_request: Option<AttestationRequest> = None;
+
         for ext in exts.iter() {
             match ext {
                 ServerExtension::AttestationResponse(attestation_response) => {
@@ -538,17 +537,8 @@ impl State<ClientConnectionData> for ExpectEncryptedExtensions {
                         debug!("Received attestation request from server for mutual attestation");
                         debug!("Server requested attestation type: {:?}", attestation_request.attestation_type);
                         
-                        // Generate our attestation response if we have a matching generator
-                        if let Some(ref attestation_config) = self.config.attestation_config {
-                            if attestation_config.report_generator.get_attestation_type() == attestation_request.attestation_type {
-                                let our_response = attestation_config.report_generator.generate_report(
-                                    &attestation_request.nonce,
-                                    &attestation_request.data
-                                )?;
-                                
-                                debug!("Generated our attestation response for server");
-                            }
-                        }
+                        // Store the server's request for later use
+                        server_attestation_request = Some(attestation_request.clone());
                     } else {
                         return Err(cx.common.send_fatal_alert(
                             AlertDescription::UnsupportedExtension,
@@ -558,6 +548,10 @@ impl State<ClientConnectionData> for ExpectEncryptedExtensions {
                 }
                 _ => {},
             }
+        }
+
+        if let Some(request) = server_attestation_request {
+            cx.data.server_attestation_request = Some(request);
         }
 
         let ech_retry_configs = match (cx.data.ech_status, exts.server_ech_extension()) {
@@ -948,6 +942,7 @@ impl State<ClientConnectionData> for ExpectCertificateRequest {
             })
             .cloned();
 
+        // For TLS 1.3, pass the attestation configuration and server's attestation request
         let client_auth = ClientAuthDetails::resolve(
             self.config
                 .client_auth_cert_resolver
@@ -956,7 +951,11 @@ impl State<ClientConnectionData> for ExpectCertificateRequest {
             &compat_sigschemes,
             Some(certreq.context.0.clone()),
             compat_compressor,
-        );
+            // Pass attestation config if available
+            self.config.attestation_config.as_ref(),
+            // Pass server's attestation request stored in client connection data
+            cx.data.server_attestation_request.as_ref(),
+        )?;
 
         Ok(if self.offered_cert_compression {
             Box::new(ExpectCertificateOrCompressedCertificate {
@@ -1271,17 +1270,45 @@ fn emit_compressed_certificate_tls13(
     auth_context: Option<Vec<u8>>,
     compressor: &dyn compress::CertCompressor,
     config: &ClientConfig,
+    attestation_response: Option<&AttestationResponse>,
 ) {
-    let mut cert_payload = CertificatePayloadTls13::new(certkey.cert.iter(), None);
-    cert_payload.context = PayloadU8::new(auth_context.clone().unwrap_or_default());
+    debug!("emit_compressed_certificate_tls13 called");
+    debug!("  attestation_response present: {}", attestation_response.is_some());
+    
+    // Create certificate entries with extensions for compression
+    let mut cert_entries = Vec::new();
+    
+    for (i, cert) in certkey.cert.iter().enumerate() {
+        let mut extensions = Vec::new();
+        
+        // Add attestation response to the first certificate (end entity)
+        if i == 0 {
+            if let Some(response) = attestation_response {
+                debug!("Adding attestation response to compressed certificate entry {}", i);
+                extensions.push(CertificateExtension::AttestationResponse(response.clone()));
+            }
+        }
+        
+        cert_entries.push(CertificateEntry {
+            cert: cert.clone(),
+            exts: extensions,
+        });
+    }
+    
+    let cert_payload = CertificatePayloadTls13 {
+        context: PayloadU8::new(auth_context.clone().unwrap_or_default()),
+        entries: cert_entries,
+    };
 
     let Ok(compressed) = config
         .cert_compression_cache
         .compression_for(compressor, &cert_payload)
     else {
-        return emit_certificate_tls13(flight, Some(certkey), auth_context);
+        debug!("Compression failed, falling back to regular certificate");
+        return emit_certificate_tls13(flight, Some(certkey), auth_context, attestation_response);
     };
 
+    debug!("Certificate compressed successfully");
     flight.add(HandshakeMessagePayload(
         HandshakePayload::CompressedCertificate(compressed.compressed_cert_payload()),
     ));
@@ -1291,16 +1318,42 @@ fn emit_certificate_tls13(
     flight: &mut HandshakeFlightTls13<'_>,
     certkey: Option<&CertifiedKey>,
     auth_context: Option<Vec<u8>>,
+    attestation_response: Option<&AttestationResponse>,
 ) {
     let certs = certkey
         .map(|ck| ck.cert.as_ref())
         .unwrap_or(&[][..]);
-    let mut cert_payload = CertificatePayloadTls13::new(certs.iter(), None);
-    cert_payload.context = PayloadU8::new(auth_context.unwrap_or_default());
+    
+    // Create certificate entries with extensions
+    let mut cert_entries = Vec::new();
+    
+    for (i, cert) in certs.iter().enumerate() {
+        let mut extensions = Vec::new();
+        
+        // Add attestation response to the first certificate (end entity)
+        if i == 0 {
+            if let Some(response) = attestation_response {
+                extensions.push(CertificateExtension::AttestationResponse(response.clone()));
+                debug!("Client's attestation response added to certificate entry as extension");
+            }
+        }
+        
+        cert_entries.push(CertificateEntry {
+            cert: cert.clone(),
+            exts: extensions,
+        });
+    }
+    
+    let cert_payload = CertificatePayloadTls13 {
+        context: PayloadU8::new(auth_context.unwrap_or_default()),
+        entries: cert_entries,
+    };
 
     flight.add(HandshakeMessagePayload(HandshakePayload::CertificateTls13(
         cert_payload,
     )));
+    
+    debug!("Certificate message added to flight");
 }
 
 fn emit_certverify_tls13(
@@ -1406,22 +1459,26 @@ impl State<ClientConnectionData> for ExpectFinished {
                 ClientAuthDetails::Empty {
                     auth_context_tls13: auth_context,
                 } => {
-                    emit_certificate_tls13(&mut flight, None, auth_context);
+                    debug!("Sending empty certificate (no client auth)");
+                    emit_certificate_tls13(&mut flight, None, auth_context, None);
                 }
                 ClientAuthDetails::Verify {
                     auth_context_tls13: auth_context,
+                    attestation_response,
                     ..
                 } if cx.data.ech_status == EchStatus::Rejected => {
-                    // If ECH was offered, and rejected, we MUST respond with
-                    // an empty certificate message.
-                    emit_certificate_tls13(&mut flight, None, auth_context);
+                    debug!("ECH rejected, sending empty certificate with attestation response");
+                    emit_certificate_tls13(&mut flight, None, auth_context, attestation_response.as_ref());
                 }
                 ClientAuthDetails::Verify {
                     certkey,
                     signer,
                     auth_context_tls13: auth_context,
                     compressor,
+                    attestation_response,
                 } => {
+                    debug!("Sending client certificate with authentication");
+                    
                     if let Some(compressor) = compressor {
                         emit_compressed_certificate_tls13(
                             &mut flight,
@@ -1429,9 +1486,10 @@ impl State<ClientConnectionData> for ExpectFinished {
                             auth_context,
                             compressor,
                             &st.config,
+                            attestation_response.as_ref(),
                         );
                     } else {
-                        emit_certificate_tls13(&mut flight, Some(&certkey), auth_context);
+                        emit_certificate_tls13(&mut flight, Some(&certkey), auth_context, attestation_response.as_ref());
                     }
                     emit_certverify_tls13(&mut flight, signer.as_ref())?;
                 }

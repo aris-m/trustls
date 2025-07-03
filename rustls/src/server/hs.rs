@@ -131,7 +131,7 @@ impl ExtensionProcessing {
             }
         }
 
-        // Generic attestation handling
+        // Generic attestation handling - ONLY ONCE, NOT DUPLICATED
         if let Some(attestation_config) = &config.attestation_config {
             // Check if client sent attestation request
             if let Some(client_request) = hello.get_attestation_request() {
@@ -142,6 +142,9 @@ impl ExtensionProcessing {
                 )?;
                 // Add attestation response
                 self.exts.push(ServerExtension::AttestationResponse(report));
+                
+                // Store client's original request for later verification
+                cx.data.client_attestation_request = Some(client_request.clone());
             }
             // Add server's own attestation request for mutual attestation
             self.exts.push(ServerExtension::AttestationRequest(attestation_config.request.clone()));

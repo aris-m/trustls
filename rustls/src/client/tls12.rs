@@ -706,7 +706,7 @@ struct ExpectCertificateRequest<'a> {
 impl State<ClientConnectionData> for ExpectCertificateRequest<'_> {
     fn handle<'m>(
         mut self: Box<Self>,
-        _cx: &mut ClientContext<'_>,
+        cx: &mut ClientContext<'_>,
         m: Message<'m>,
     ) -> hs::NextStateOrError<'m>
     where
@@ -728,6 +728,7 @@ impl State<ClientConnectionData> for ExpectCertificateRequest<'_> {
 
         const NO_CONTEXT: Option<Vec<u8>> = None; // TLS 1.2 doesn't use a context.
         let no_compression = None; // or compression
+        
         let client_auth = ClientAuthDetails::resolve(
             self.config
                 .client_auth_cert_resolver
@@ -736,7 +737,9 @@ impl State<ClientConnectionData> for ExpectCertificateRequest<'_> {
             &certreq.sigschemes,
             NO_CONTEXT,
             no_compression,
-        );
+            None, 
+            None, 
+        )?;
 
         Ok(Box::new(ExpectServerDone {
             config: self.config,
