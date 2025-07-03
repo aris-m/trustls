@@ -425,9 +425,9 @@ fn validate_encrypted_extensions(
     }
 
     let mut solicited_extensions = vec![];
-    if hello.sent_extensions.contains(&ExtensionType::TpmAttestationRequest) {
-        solicited_extensions.push(ExtensionType::TpmAttestationRequest);
-        solicited_extensions.push(ExtensionType::TpmAttestationResponse);
+    if hello.sent_extensions.contains(&ExtensionType::AttestationRequest) {
+        solicited_extensions.push(ExtensionType::AttestationRequest);
+        solicited_extensions.push(ExtensionType::AttestationResponse);
     }
 
     if hello.server_sent_unsolicited_extensions(exts, &solicited_extensions) {
@@ -437,27 +437,18 @@ fn validate_encrypted_extensions(
         ));
     }
 
-    for ext in exts {
-        if ALLOWED_PLAINTEXT_EXTS.contains(&ext.ext_type())
-            || DISALLOWED_TLS13_EXTS.contains(&ext.ext_type())
-        {
-            return Err(common.send_fatal_alert(
-                AlertDescription::UnsupportedExtension,
-                PeerMisbehaved::DisallowedEncryptedExtension,
-            ));
-        }
-
+    for ext in exts.iter() {
         match ext {
-            ServerExtension::TpmAttestationResponse(_) => {
-                if !hello.sent_extensions.contains(&ExtensionType::TpmAttestationRequest) {
+            ServerExtension::AttestationResponse(_) => {
+                if !hello.sent_extensions.contains(&ExtensionType::AttestationRequest) {
                     return Err(common.send_fatal_alert(
                         AlertDescription::UnsupportedExtension,
                         PeerMisbehaved::UnsolicitedEncryptedExtension,
                     ));
                 }
             }
-            ServerExtension::TpmAttestationRequest(_) => {
-                if !hello.sent_extensions.contains(&ExtensionType::TpmAttestationRequest) {
+            ServerExtension::AttestationRequest(_) => {
+                if !hello.sent_extensions.contains(&ExtensionType::AttestationRequest) {
                     return Err(common.send_fatal_alert(
                         AlertDescription::UnsupportedExtension,
                         PeerMisbehaved::UnsolicitedEncryptedExtension,
@@ -504,17 +495,37 @@ impl State<ClientConnectionData> for ExpectEncryptedExtensions {
         hs::process_client_cert_type_extension(cx.common, &self.config, exts.client_cert_type())?;
         hs::process_server_cert_type_extension(cx.common, &self.config, exts.server_cert_type())?;
 
-        let client_sent_tpm_request = self.hello.sent_extensions
-            .contains(&ExtensionType::TpmAttestationRequest);
+        let client_sent_attestation_request = self.hello.sent_extensions
+            .contains(&ExtensionType::AttestationRequest);
 
         for ext in exts.iter() {
             match ext {
-                ServerExtension::TpmAttestationResponse(tpm_response) => {
-                    if client_sent_tpm_request {
-                        debug!("Received TPM attestation response from server");
-                        debug!("Server TPM report length: {}", tpm_response.report.len());
-                        debug!("Server TPM signature length: {}", tpm_response.signature.len());
-                        debug!("Server TPM AK cert length: {}", tpm_response.ak_cert.len());
+                ServerExtension::AttestationResponse(attestation_response) => {
+                    if client_sent_attestation_request {
+                        debug!("Received attestation response from server");
+                        debug!("Server attestation type: {:?}", attestation_response.attestation_type);
+                        debug!("Server report length: {}", attestation_response.report.len());
+                        
+                        // Verify the server's attestation response if we have a verifier configured
+                        if let Some(ref attestation_config) = self.config.attestation_config {
+                            if attestation_config.verifier.get_attestation_type() == attestation_response.attestation_type {
+                                let is_valid = attestation_config.verifier.verify_report(
+                                    attestation_response,
+                                    &attestation_config.request.nonce
+                                )?;
+                                
+                                if !is_valid {
+                                    return Err(cx.common.send_fatal_alert(
+                                        AlertDescription::BadCertificate,
+                                        Error::InvalidAttestation,
+                                    ));
+                                }
+                                
+                                debug!("Server attestation verification successful");
+                            } else {
+                                debug!("Attestation type mismatch, skipping verification");
+                            }
+                        }
                     } else {
                         return Err(cx.common.send_fatal_alert(
                             AlertDescription::UnsupportedExtension,
@@ -522,11 +533,22 @@ impl State<ClientConnectionData> for ExpectEncryptedExtensions {
                         ));
                     }
                 }
-                ServerExtension::TpmAttestationRequest(tpm_request) => {
-                    if client_sent_tpm_request {
-                        debug!("Received TPM attestation request from server for mutual attestation");
-                        debug!("Server nonce length: {}", tpm_request.nonce.len());
-                        debug!("Server PCR selection: {:?}", tpm_request.pcr_selection);
+                ServerExtension::AttestationRequest(attestation_request) => {
+                    if client_sent_attestation_request {
+                        debug!("Received attestation request from server for mutual attestation");
+                        debug!("Server requested attestation type: {:?}", attestation_request.attestation_type);
+                        
+                        // Generate our attestation response if we have a matching generator
+                        if let Some(ref attestation_config) = self.config.attestation_config {
+                            if attestation_config.report_generator.get_attestation_type() == attestation_request.attestation_type {
+                                let our_response = attestation_config.report_generator.generate_report(
+                                    &attestation_request.nonce,
+                                    &attestation_request.data
+                                )?;
+                                
+                                debug!("Generated our attestation response for server");
+                            }
+                        }
                     } else {
                         return Err(cx.common.send_fatal_alert(
                             AlertDescription::UnsupportedExtension,

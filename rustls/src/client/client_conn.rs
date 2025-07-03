@@ -29,9 +29,9 @@ use crate::time_provider::TimeProvider;
 use crate::unbuffered::{EncryptError, TransmitTlsData};
 #[cfg(doc)]
 use crate::{DistinguishedName, crypto};
-use crate::{compress, sign, verify, versions, KeyLog, TpmAttestationResponse, WantsVersions};
+use crate::{compress, sign, verify, versions, KeyLog, WantsVersions};
 
-use crate::msgs::tpm_attestation::{TpmAttestationRequest, ClientTpmConfig};
+use crate::attestation::{ClientAttestationConfig, AttestationResponse};
 
 /// A trait for the ability to store client session data, so that sessions
 /// can be resumed in future connections.
@@ -285,7 +285,7 @@ pub struct ClientConfig {
     pub(super) ech_mode: Option<EchMode>,
 
     /// TPM attestation configuration including request and verification/generation capabilities
-    pub tpm_config: Option<ClientTpmConfig>,
+    pub attestation_config: Option<ClientAttestationConfig>,
 }
 
 impl ClientConfig {
@@ -448,20 +448,8 @@ impl ClientConfig {
             .ok_or(Error::FailedToGetCurrentTime)
     }
 
-    /// Enable TPM attestation with the given nonce and PCR selection
-    pub fn with_tpm_attestation(
-        mut self, 
-        nonce: Vec<u8>, 
-        pcr_selection: Vec<u8>,
-        verifier: Arc<dyn crate::msgs::tpm_attestation::TpmReportVerifier>,
-        report_generator: Arc<dyn crate::msgs::tpm_attestation::TpmReportGenerator>
-    ) -> Self {
-        let request = TpmAttestationRequest::new(nonce, pcr_selection);
-        self.tpm_config = Some(ClientTpmConfig {
-            request,
-            verifier,
-            report_generator,
-        });
+    pub fn with_attestation_config(mut self, config: ClientAttestationConfig) -> Self {
+        self.attestation_config = Some(config);
         self
     }
 }
@@ -1057,7 +1045,7 @@ pub struct ClientConnectionData {
     pub(super) early_data: EarlyData,
     pub(super) ech_status: EchStatus,
     /// If the client is configured to use TPM attestation, this contains the request
-    pub tpm_attestation_response: Option<TpmAttestationResponse>,
+    pub attestation_response: Option<AttestationResponse>,
 }
 
 impl ClientConnectionData {
@@ -1065,7 +1053,7 @@ impl ClientConnectionData {
         Self {
             early_data: EarlyData::new(),
             ech_status: EchStatus::NotOffered,
-            tpm_attestation_response: None,
+            attestation_response: None,
         }
     }
 }

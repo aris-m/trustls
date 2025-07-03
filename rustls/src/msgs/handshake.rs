@@ -31,7 +31,7 @@ use crate::sync::Arc;
 use crate::verify::DigitallySignedStruct;
 use crate::x509::wrap_in_sequence;
 
-use crate::msgs::tpm_attestation::{ TpmAttestationRequest, TpmAttestationResponse};
+use crate::attestation::{AttestationRequest, AttestationResponse};
 
 /// Create a newtype wrapper around a given type.
 ///
@@ -726,7 +726,7 @@ pub(crate) enum ClientExtension {
     EncryptedClientHello(EncryptedClientHello),
     EncryptedClientHelloOuterExtensions(Vec<ExtensionType>),
     AuthorityNames(Vec<DistinguishedName>),
-    TpmAttestationRequest(TpmAttestationRequest),
+    AttestationRequest(AttestationRequest), 
     Unknown(UnknownExtension),
 }
 
@@ -757,7 +757,7 @@ impl ClientExtension {
                 ExtensionType::EncryptedClientHelloOuterExtensions
             }
             Self::AuthorityNames(_) => ExtensionType::CertificateAuthorities,
-            Self::TpmAttestationRequest(_) => ExtensionType::TpmAttestationRequest,
+            Self::AttestationRequest(_) => ExtensionType::AttestationRequest,
             Self::Unknown(r) => r.typ,
         }
     }
@@ -791,7 +791,7 @@ impl Codec<'_> for ClientExtension {
             Self::EncryptedClientHello(r) => r.encode(nested.buf),
             Self::EncryptedClientHelloOuterExtensions(r) => r.encode(nested.buf),
             Self::AuthorityNames(r) => r.encode(nested.buf),
-            Self::TpmAttestationRequest(r) => r.encode(nested.buf),
+            Self::AttestationRequest(r) => r.encode(nested.buf),
             Self::Unknown(r) => r.encode(nested.buf),
         }
     }
@@ -846,8 +846,8 @@ impl Codec<'_> for ClientExtension {
                 }
                 items
             }),
-            ExtensionType::TpmAttestationRequest => {
-                Self::TpmAttestationRequest(TpmAttestationRequest::read(&mut sub)?)
+            ExtensionType::AttestationRequest => {
+                Self::AttestationRequest(AttestationRequest::read(&mut sub)?)
             },
             _ => Self::Unknown(UnknownExtension::read(typ, &mut sub)),
         };
@@ -912,8 +912,8 @@ pub(crate) enum ServerExtension {
     TransportParametersDraft(Vec<u8>),
     EarlyData,
     EncryptedClientHello(ServerEncryptedClientHello),
-    TpmAttestationRequest(TpmAttestationRequest),
-    TpmAttestationResponse(TpmAttestationResponse),
+    AttestationRequest(AttestationRequest),
+    AttestationResponse(AttestationResponse),
     Unknown(UnknownExtension),
 }
 
@@ -936,8 +936,8 @@ impl ServerExtension {
             Self::TransportParametersDraft(_) => ExtensionType::TransportParametersDraft,
             Self::EarlyData => ExtensionType::EarlyData,
             Self::EncryptedClientHello(_) => ExtensionType::EncryptedClientHello,
-            Self::TpmAttestationRequest(_) => ExtensionType::TpmAttestationRequest,
-            Self::TpmAttestationResponse(_) => ExtensionType::TpmAttestationResponse,
+            Self::AttestationRequest(_) => ExtensionType::AttestationRequest,
+            Self::AttestationResponse(_) => ExtensionType::AttestationResponse,
             Self::Unknown(r) => r.typ,
         }
     }
@@ -966,8 +966,8 @@ impl Codec<'_> for ServerExtension {
                 nested.buf.extend_from_slice(r);
             }
             Self::EncryptedClientHello(r) => r.encode(nested.buf),
-            Self::TpmAttestationRequest(ref r) => r.encode(nested.buf),
-            Self::TpmAttestationResponse(ref r) => r.encode(nested.buf),
+            Self::AttestationRequest(ref r) => r.encode(nested.buf),
+            Self::AttestationResponse(ref r) => r.encode(nested.buf),
             Self::Unknown(r) => r.encode(nested.buf),
         }
     }
@@ -1006,11 +1006,11 @@ impl Codec<'_> for ServerExtension {
             ExtensionType::EncryptedClientHello => {
                 Self::EncryptedClientHello(ServerEncryptedClientHello::read(&mut sub)?)
             }
-            ExtensionType::TpmAttestationRequest => {
-                Self::TpmAttestationRequest(TpmAttestationRequest::read(&mut sub)?)
+            ExtensionType::AttestationRequest => {
+                Self::AttestationRequest(AttestationRequest::read(&mut sub)?)
             }
-            ExtensionType::TpmAttestationResponse => {
-                Self::TpmAttestationResponse(TpmAttestationResponse::read(&mut sub)?)
+            ExtensionType::AttestationResponse => {
+                Self::AttestationResponse(AttestationResponse::read(&mut sub)?)
             }
             _ => Self::Unknown(UnknownExtension::read(typ, &mut sub)),
         };
@@ -1289,10 +1289,10 @@ impl ClientHelloPayload {
         }
     }
 
-    pub(crate) fn get_tpm_attestation_request(&self) -> Option<&TpmAttestationRequest> {
-        self.find_extension(ExtensionType::TpmAttestationRequest)
+    pub(crate) fn get_attestation_request(&self) -> Option<&AttestationRequest> {
+        self.find_extension(ExtensionType::AttestationRequest)
             .and_then(|ext| match ext {
-                ClientExtension::TpmAttestationRequest(req) => Some(req),
+                ClientExtension::AttestationRequest(req) => Some(req),
                 _ => None,
             })
     }
@@ -1694,7 +1694,6 @@ pub(crate) const CERTIFICATE_MAX_SIZE_LIMIT: usize = 0x1_0000;
 #[derive(Debug)]
 pub(crate) enum CertificateExtension<'a> {
     CertificateStatus(CertificateStatus<'a>),
-    TpmAttestationResponse(TpmAttestationResponse),
     Unknown(UnknownExtension),
 }
 
@@ -1702,7 +1701,6 @@ impl CertificateExtension<'_> {
     pub(crate) fn ext_type(&self) -> ExtensionType {
         match self {
             Self::CertificateStatus(_) => ExtensionType::StatusRequest,
-            Self::TpmAttestationResponse(_) => ExtensionType::TpmAttestationResponse,
             Self::Unknown(r) => r.typ,
         }
     }
@@ -1717,7 +1715,6 @@ impl CertificateExtension<'_> {
     pub(crate) fn into_owned(self) -> CertificateExtension<'static> {
         match self {
             Self::CertificateStatus(st) => CertificateExtension::CertificateStatus(st.into_owned()),
-            Self::TpmAttestationResponse(resp) => CertificateExtension::TpmAttestationResponse(resp),
             Self::Unknown(unk) => CertificateExtension::Unknown(unk),
         }
     }
@@ -1730,7 +1727,6 @@ impl<'a> Codec<'a> for CertificateExtension<'a> {
         let nested = LengthPrefixedBuffer::new(ListLength::U16, bytes);
         match self {
             Self::CertificateStatus(r) => r.encode(nested.buf),
-            Self::TpmAttestationResponse(r) => r.encode(nested.buf),
             Self::Unknown(r) => r.encode(nested.buf),
         }
     }

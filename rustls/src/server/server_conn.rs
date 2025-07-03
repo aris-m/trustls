@@ -35,7 +35,7 @@ use crate::time_provider::TimeProvider;
 use crate::vecbuf::ChunkVecBuffer;
 use crate::{DistinguishedName, KeyLog, WantsVersions, compress, sign, verify, versions};
 
-use crate::msgs::tpm_attestation::ServerTpmAttestation;
+use crate::attestation::ServerAttestationConfig;
 
 /// A trait for the ability to store server session data.
 ///
@@ -427,8 +427,8 @@ pub struct ServerConfig {
     /// [RFC8779]: https://datatracker.ietf.org/doc/rfc8879/
     pub cert_decompressors: Vec<&'static dyn compress::CertDecompressor>,
 
-    /// If set, this is a request for TPM attestation.
-    pub tpm_attestation: Option<ServerTpmAttestation>,
+    /// Generic remote attestation configuration.
+    pub attestation_config: Option<ServerAttestationConfig>,
 }
 
 impl ServerConfig {
@@ -563,18 +563,9 @@ impl ServerConfig {
             .ok_or(Error::FailedToGetCurrentTime)
     }
 
-    /// Set up an attestation request alongside report to be sent to the client.
-    pub fn with_tpm_attestation(
-        mut self, 
-        nonce: Vec<u8>, 
-        pcr_selection: Vec<u8>,
-        report_generator: Arc<dyn crate::msgs::tpm_attestation::TpmReportGenerator>
-    ) -> Self {
-        let request = crate::msgs::tpm_attestation::TpmAttestationRequest::new(nonce, pcr_selection);
-        self.tpm_attestation = Some(ServerTpmAttestation {
-            request,
-            report_generator,
-        });
+    /// Set up generic attestation configuration
+    pub fn with_attestation_config(mut self, config: ServerAttestationConfig) -> Self {
+        self.attestation_config = Some(config);
         self
     }
 }

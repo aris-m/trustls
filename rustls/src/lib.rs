@@ -715,4 +715,10 @@ mod hash_map {
     pub(crate) use hashbrown::hash_map::Entry;
 }
 
-pub use crate::msgs::tpm_attestation::{TpmAttestationRequest, TpmAttestationResponse, ServerTpmAttestation, TpmReportGenerator};
+pub mod attestation;
+
+pub use attestation::{
+    AttestationType, AttestationRequest, AttestationResponse,
+    AttestationReportGenerator, AttestationReportVerifier,
+    ClientAttestationConfig, ServerAttestationConfig,
+};

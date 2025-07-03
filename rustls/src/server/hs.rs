@@ -131,20 +131,20 @@ impl ExtensionProcessing {
             }
         }
 
-        // TPM Attestation handling
-        if let Some(tmp_config) = &config.tpm_attestation {
+        // Generic attestation handling
+        if let Some(attestation_config) = &config.attestation_config {
             // Check if client sent attestation request
-            if let Some(client_request) = hello.get_tpm_attestation_request() {
-                // Generate report based on client's nonce
-                let report = tmp_config.report_generator.generate_report(
+            if let Some(client_request) = hello.get_attestation_request() {
+                // Generate report based on client's request
+                let report = attestation_config.report_generator.generate_report(
                     &client_request.nonce,
-                    &client_request.pcr_selection
+                    &client_request.data
                 )?;
                 // Add attestation response
-                self.exts.push(ServerExtension::TpmAttestationResponse(report));
+                self.exts.push(ServerExtension::AttestationResponse(report));
             }
-            // Add server's own attestation request
-            self.exts.push(ServerExtension::TpmAttestationRequest(tmp_config.request.clone()));
+            // Add server's own attestation request for mutual attestation
+            self.exts.push(ServerExtension::AttestationRequest(attestation_config.request.clone()));
         }
 
         let for_resume = resumedata.is_some();

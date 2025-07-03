@@ -395,8 +395,8 @@ fn emit_client_hello_for_retry(
         ]));
     }
 
-    if let Some(tpm_config) = &config.tpm_config {
-        exts.push(ClientExtension::TpmAttestationRequest(tpm_config.request.clone()));
+    if let Some(attestation_config) = &config.attestation_config {
+        exts.push(ClientExtension::AttestationRequest(attestation_config.request.clone()));
     } 
 
     // Extra extensions must be placed before the PSK extension

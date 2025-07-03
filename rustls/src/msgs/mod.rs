@@ -44,7 +44,6 @@ pub(crate) mod fragmenter;
 pub(crate) mod handshake;
 pub(crate) mod message;
 pub(crate) mod persist;
-pub mod tpm_attestation;
 
 #[cfg(test)]
 mod handshake_test;
