@@ -131,23 +131,34 @@ impl ExtensionProcessing {
             }
         }
 
-        // Generic attestation handling - ONLY ONCE, NOT DUPLICATED
+        let is_mutual_tls = config.verifier.client_auth_mandatory();
+
         if let Some(attestation_config) = &config.attestation_config {
-            // Check if client sent attestation request
-            if let Some(client_request) = hello.get_attestation_request() {
-                // Generate report based on client's request
-                let report = attestation_config.report_generator.generate_report(
-                    &client_request.nonce,
-                    &client_request.data
-                )?;
-                // Add attestation response
-                self.exts.push(ServerExtension::AttestationResponse(report));
+            if is_mutual_tls {
+                if let Some(client_request) = hello.get_attestation_request() {
+                    let report = attestation_config.report_generator.generate_report(
+                        &client_request.nonce,
+                        &client_request.data
+                    )?;
+
+                    self.exts.push(ServerExtension::AttestationResponse(report));
+                    
+                    cx.data.client_attestation_request = Some(client_request.clone());
+                }
                 
-                // Store client's original request for later verification
-                cx.data.client_attestation_request = Some(client_request.clone());
+                self.exts.push(ServerExtension::AttestationRequest(attestation_config.request.clone()));
+            } else {
+                if let Some(client_request) = hello.get_attestation_request() {
+                    let report = attestation_config.report_generator.generate_report(
+                        &client_request.nonce,
+                        &client_request.data
+                    )?;
+
+                    self.exts.push(ServerExtension::AttestationResponse(report));
+                    
+                    cx.data.client_attestation_request = Some(client_request.clone());
+                }
             }
-            // Add server's own attestation request for mutual attestation
-            self.exts.push(ServerExtension::AttestationRequest(attestation_config.request.clone()));
         }
 
         let for_resume = resumedata.is_some();
