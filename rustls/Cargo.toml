@@ -47,6 +47,9 @@ webpki = { workspace = true }
 pki-types = { workspace = true }
 zeroize = { workspace = true }
 zlib-rs = { workspace = true, optional = true }
+tss-esapi = "7"
+sha2 = "0.10"
+rsa = "0.9.8"
 
 [dev-dependencies]
 base64 = { workspace = true }
