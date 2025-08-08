@@ -58,8 +58,10 @@ impl AttestationReportVerifier for TpmReportVerifier {
         debug!("Verifying TPM report");
         
         if response.attestation_type != AttestationType::TPM {
-            error!("Wrong attestation type, expected TPM");
-            return Ok(false);
+            return Err(Error::AttestationVerificationFailed(format!(
+                "Attestation type mismatch, expected TPM, got: {:?}",
+                response.attestation_type
+            )));
         }
         
         let result = verify_tpm_report(
@@ -77,14 +79,14 @@ pub fn get_tpm_report(nonce: &[u8], pcr_selection: &[u8]) -> Result<(Vec<u8>, Ve
     read_with_attestation_key(nonce, pcr_selection)
         .map_err(|e| {
             error!("TPM attestation failed: {:?}", e);
-            Error::General(format!("TPM attestation failed: {:?}", e))
+            Error::AttestationGenerationFailed(format!("TPM attestation failed: {:?}", e))
         })
 }
 
 fn read_with_attestation_key(nonce: &[u8], pcr_selection: &[u8]) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), Error> {
     let tcti = TctiNameConf::Swtpm(Default::default());
     let mut ctx = Context::new(tcti)
-        .map_err(|e| Error::General(format!("TPM connection failed: {:?}", e)))?;
+        .map_err(|e| Error::AttestationGenerationFailed(format!("TPM connection failed: {:?}", e)))?;
 
     debug!("Creating attestation key...");
 
@@ -104,10 +106,10 @@ fn read_with_attestation_key(nonce: &[u8], pcr_selection: &[u8]) -> Result<(Vec<
     let pcr_selection_list = PcrSelectionListBuilder::new()
         .with_selection(HashingAlgorithm::Sha256, &slots_to_read)
         .build()
-        .map_err(|e| Error::General(format!("PCR selection failed: {:?}", e)))?;
+        .map_err(|e| Error::AttestationGenerationFailed(format!("PCR selection failed: {:?}", e)))?;
 
     let qualifying_data = Data::try_from(nonce.to_vec())
-        .map_err(|e| Error::General(format!("Nonce conversion failed: {:?}", e)))?;
+        .map_err(|e| Error::AttestationGenerationFailed(format!("Nonce conversion failed: {:?}", e)))?;
 
     let signature_scheme = SignatureScheme::RsaPss {
         hash_scheme: HashScheme::new(HashingAlgorithm::Sha256),
@@ -119,20 +121,20 @@ fn read_with_attestation_key(nonce: &[u8], pcr_selection: &[u8]) -> Result<(Vec<
         .execute_with_nullauth_session(|ctx| {
             ctx.quote(ak_handle, qualifying_data, signature_scheme, pcr_selection_list)
         })
-        .map_err(|e| Error::General(format!("TPM quote failed: {:?}", e)))?;
+        .map_err(|e| Error::AttestationGenerationFailed(format!("TPM quote failed: {:?}", e)))?;
 
     let (ak_public, _, _) = ctx
         .execute_with_nullauth_session(|ctx| ctx.read_public(ak_handle))
-        .map_err(|e| Error::General(format!("Failed to read AK public: {:?}", e)))?;
+        .map_err(|e| Error::AttestationGenerationFailed(format!("Failed to read AK public: {:?}", e)))?;
 
     let quoted_bytes = quoted_data.marshall()
-        .map_err(|e| Error::General(format!("Failed to serialize quote: {:?}", e)))?;
+        .map_err(|e| Error::AttestationGenerationFailed(format!("Failed to serialize quote: {:?}", e)))?;
     
     let signature_bytes = signature.marshall()
-        .map_err(|e| Error::General(format!("Failed to serialize signature: {:?}", e)))?;
+        .map_err(|e| Error::AttestationGenerationFailed(format!("Failed to serialize signature: {:?}", e)))?;
     
     let ak_public_bytes = ak_public.marshall()
-        .map_err(|e| Error::General(format!("Failed to serialize AK public: {:?}", e)))?;
+        .map_err(|e| Error::AttestationGenerationFailed(format!("Failed to serialize AK public: {:?}", e)))?;
 
     let mut report = Vec::new();
     report.extend_from_slice(nonce);
@@ -155,20 +157,20 @@ fn create_attestation_key(ctx: &mut Context) -> Result<KeyHandle, Error> {
     let ek_template = create_ek_public_from_default_template(
         tss_esapi::interface_types::algorithm::AsymmetricAlgorithm::Rsa, 
         None
-    ).map_err(|e| Error::General(format!("EK template failed: {:?}", e)))?;
+    ).map_err(|e| Error::AttestationGenerationFailed(format!("EK template failed: {:?}", e)))?;
 
     let ek_handle = ctx
         .execute_with_nullauth_session(|ctx| {
             ctx.create_primary(Hierarchy::Endorsement, ek_template, None, None, None, None)
         })
-        .map_err(|e| Error::General(format!("EK creation failed: {:?}", e)))?
+        .map_err(|e| Error::AttestationGenerationFailed(format!("EK creation failed: {:?}", e)))?
         .key_handle;
 
     let ak_result = create_ak(ctx, ek_handle, hash_alg, sign_alg, None, tss_esapi::abstraction::DefaultKeyImpl)
-        .map_err(|e| Error::General(format!("AK creation failed: {:?}", e)))?;
+        .map_err(|e| Error::AttestationGenerationFailed(format!("AK creation failed: {:?}", e)))?;
 
     let ak_handle = load_ak(ctx, ek_handle, None, ak_result.out_private, ak_result.out_public)
-        .map_err(|e| Error::General(format!("AK load failed: {:?}", e)))?;
+        .map_err(|e| Error::AttestationGenerationFailed(format!("AK load failed: {:?}", e)))?;
 
     debug!("Attestation key created successfully");
 
@@ -244,27 +246,27 @@ fn parse_tpm_structures(
 ) -> Result<(Attest, Signature, Public), Error> {
     let nonce_len = 32;
     if report.len() <= nonce_len {
-        return Err(Error::General("Report too short".to_string()));
+        return Err(Error::AttestationVerificationFailed("Report too short".to_string()));
     }
 
     if signature.is_empty() {
-        return Err(Error::General("Empty signature".to_string()));
+        return Err(Error::AttestationVerificationFailed("Empty signature".to_string()));
     }
     
     if ak_public_bytes.is_empty() {
-        return Err(Error::General("Empty public key".to_string()));
+        return Err(Error::AttestationVerificationFailed("Empty public key".to_string()));
     }
     
     let quote_data = &report[nonce_len..];
     
     let attest = Attest::unmarshall(quote_data)
-        .map_err(|e| Error::General(format!("Failed to parse attestation: {:?}", e)))?;
+        .map_err(|e| Error::AttestationVerificationFailed(format!("Failed to parse attestation: {:?}", e)))?;
     
     let signature_struct = Signature::unmarshall(signature)
-        .map_err(|e| Error::General(format!("Failed to parse signature: {:?}", e)))?;
+        .map_err(|e| Error::AttestationVerificationFailed(format!("Failed to parse signature: {:?}", e)))?;
     
     let ak_public = Public::unmarshall(ak_public_bytes)
-        .map_err(|e| Error::General(format!("Failed to parse AK public: {:?}", e)))?;
+        .map_err(|e| Error::AttestationVerificationFailed(format!("Failed to parse AK public: {:?}", e)))?;
     
     Ok((attest, signature_struct, ak_public))
 }
@@ -283,7 +285,7 @@ fn verify_quote_signature(
     };
 
     let attest_bytes = attest.marshall()
-        .map_err(|e| Error::General(format!("Failed to marshal attest: {:?}", e)))?;
+        .map_err(|e| Error::AttestationVerificationFailed(format!("Failed to marshal attest: {:?}", e)))?;
     
     let mut hasher = Sha256::new();
     hasher.update(&attest_bytes);
@@ -324,18 +326,18 @@ fn verify_quote_signature(
 
 fn extract_rsa_public_key(ak_public: &Public) -> Result<RsaPublicKey, Error> {
     let public_key: tss_esapi::utils::PublicKey = ak_public.clone().try_into()
-        .map_err(|e| Error::General(format!("Conversion failed: {:?}", e)))?;
+        .map_err(|e| Error::AttestationVerificationFailed(format!("Conversion failed: {:?}", e)))?;
     
     let rsa_modulus = match public_key {
         tss_esapi::utils::PublicKey::Rsa(rsa_key) => rsa_key,
-        _ => return Err(Error::General("AK is not RSA key".to_string())),
+        _ => return Err(Error::AttestationVerificationFailed("AK is not RSA key".to_string())),
     };
 
     let exponent = rsa::BigUint::from(65537u32);
     let modulus = rsa::BigUint::from_bytes_be(rsa_modulus.as_slice());
 
     RsaPublicKey::new(modulus, exponent)
-        .map_err(|e| Error::General(format!("Invalid RSA key: {:?}", e)))
+        .map_err(|e| Error::AttestationVerificationFailed(format!("Invalid RSA key: {:?}", e)))
 }
 
 fn extract_signature_bytes(signature: &Signature) -> Result<Vec<u8>, Error> {
@@ -343,28 +345,28 @@ fn extract_signature_bytes(signature: &Signature) -> Result<Vec<u8>, Error> {
         Signature::RsaPss(rsa_sig) => {
             let bytes = rsa_sig.signature().as_slice().to_vec();
             if bytes.is_empty() {
-                return Err(Error::General("Empty RSA-PSS signature".to_string()));
+                return Err(Error::AttestationVerificationFailed("Empty RSA-PSS signature".to_string()));
             }
             if bytes.len() < 32 {
-                return Err(Error::General("RSA-PSS signature too short".to_string()));
+                return Err(Error::AttestationVerificationFailed("RSA-PSS signature too short".to_string()));
             }
             bytes
         },
         Signature::RsaSsa(rsa_sig) => {
             let bytes = rsa_sig.signature().as_slice().to_vec();
             if bytes.is_empty() {
-                return Err(Error::General("Empty RSA-SSA signature".to_string()));
+                return Err(Error::AttestationVerificationFailed("Empty RSA-SSA signature".to_string()));
             }
             if bytes.len() < 32 {
-                return Err(Error::General("RSA-SSA signature too short".to_string()));
+                return Err(Error::AttestationVerificationFailed("RSA-SSA signature too short".to_string()));
             }
             bytes
         },
         Signature::Null => {
-            return Err(Error::General("Null signature not valid for TPM quotes".to_string()));
+            return Err(Error::AttestationVerificationFailed("Null signature not valid for TPM quotes".to_string()));
         },
         _ => {
-            return Err(Error::General("Unsupported signature type for TPM quotes".to_string()));
+            return Err(Error::AttestationVerificationFailed("Unsupported signature type for TPM quotes".to_string()));
         },
     };
 

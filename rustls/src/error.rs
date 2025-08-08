@@ -115,10 +115,7 @@ pub enum Error {
     Other(OtherError),
 
     /// Attestation-related errors
-    InvalidAttestation,
-    AttestationFailed(String),
-    AttestationTypeUnsupported(u32),
-    AttestationVerificationFailed,
+    AttestationVerificationFailed(String),
     AttestationGenerationFailed(String),
 }
 
@@ -890,10 +887,7 @@ impl fmt::Display for Error {
                 write!(f, "keys may not be consistent: {why:?}")
             }
             Self::General(err) => write!(f, "unexpected error: {err}"),
-            Self::InvalidAttestation => write!(f, "Invalid attestation"),
-            Self::AttestationFailed(msg) => write!(f, "Attestation failed: {}", msg),
-            Self::AttestationTypeUnsupported(type_id) => write!(f, "Unsupported attestation type: 0x{:08X}", type_id),
-            Self::AttestationVerificationFailed => write!(f, "Attestation verification failed"),
+            Self::AttestationVerificationFailed(msg) => write!(f, "Attestation verification failed: {}", msg),
             Self::AttestationGenerationFailed(msg) => write!(f, "Attestation generation failed: {}", msg),
             Self::Other(err) => write!(f, "other error: {err}"),
         }

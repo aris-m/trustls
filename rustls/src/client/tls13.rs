@@ -1,6 +1,9 @@
+use std::string::ToString;
+
 use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
+use alloc::format; 
 
 use pki_types::ServerName;
 use subtle::ConstantTimeEq;
@@ -515,13 +518,16 @@ impl State<ClientConnectionData> for ExpectEncryptedExtensions {
                                 if !is_valid {
                                     return Err(cx.common.send_fatal_alert(
                                         AlertDescription::BadCertificate,
-                                        Error::InvalidAttestation,
+                                        Error::AttestationVerificationFailed("Server quote verification failed".to_string()),
                                     ));
                                 }
                                 
-                                debug!("Server attestation verification successful");
+                                debug!("Server quote verification successful");
                             } else {
-                                debug!("Attestation type mismatch, skipping verification");
+                                return Err(cx.common.send_fatal_alert(
+                                    AlertDescription::BadCertificate,
+                                    Error::AttestationVerificationFailed("Client attestation type mismatch".to_string()),
+                                ));
                             }
                         }
                     } else {

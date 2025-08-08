@@ -1,6 +1,9 @@
+use std::string::ToString;
+
 use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
+use alloc::format; 
 
 pub(super) use client_hello::CompleteClientHelloHandling;
 use pki_types::{CertificateDer, UnixTime};
@@ -1086,23 +1089,22 @@ impl State<ServerConnectionData> for ExpectCertificate {
                     debug!("Client attestation verification FAILED");
                     return Err(cx.common.send_fatal_alert(
                         AlertDescription::BadCertificate,
-                        Error::InvalidAttestation,
+                        Error::AttestationVerificationFailed("Client quote verification failed".to_string()),
                     ));
                 }
                 
-                debug!("Client attestation verification SUCCESSFUL");
+                debug!("Client quote verification SUCCESSFUL");
             } else {
-                debug!("Client attestation type mismatch, expected: {:?}, got: {:?}", 
-                       attestation_config.request.attestation_type,
-                       client_response.attestation_type);
-                debug!("Continuing despite attestation type mismatch");
+                return Err(cx.common.send_fatal_alert(
+                    AlertDescription::BadCertificate,
+                    Error::AttestationVerificationFailed("Client attestation type mismatch".to_string()),
+                ));
             }
         } else if expects_attestation && client_attestation_response.is_none() {
-            debug!("Expected client attestation response but none received");
-            if let Some(attestation_config) = &self.config.attestation_config {
-                debug!("  Server requested attestation type: {:?}", attestation_config.request.attestation_type);
-                debug!("  Server nonce length: {}", attestation_config.request.nonce.len());
-            }
+            return Err(cx.common.send_fatal_alert(
+                AlertDescription::BadCertificate,
+                Error::AttestationVerificationFailed("Expected client attestation response but none received".to_string()),
+            ));
         }
 
         let client_cert = certp.into_certificate_chain();
