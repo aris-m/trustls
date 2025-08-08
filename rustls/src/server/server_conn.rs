@@ -35,7 +35,7 @@ use crate::time_provider::TimeProvider;
 use crate::vecbuf::ChunkVecBuffer;
 use crate::{compress, sign, verify, versions, AttestationRequest, DistinguishedName, KeyLog, WantsVersions};
 
-use crate::attestation::ServerAttestationConfig;
+use crate::attestation::AttestationConfig;
 
 /// A trait for the ability to store server session data.
 ///
@@ -428,7 +428,7 @@ pub struct ServerConfig {
     pub cert_decompressors: Vec<&'static dyn compress::CertDecompressor>,
 
     /// Generic remote attestation configuration.
-    pub attestation_config: Option<ServerAttestationConfig>,
+    pub attestation_config: Option<AttestationConfig>,
 }
 
 impl ServerConfig {
@@ -564,7 +564,7 @@ impl ServerConfig {
     }
 
     /// Set up generic attestation configuration
-    pub fn with_attestation_config(mut self, config: ServerAttestationConfig) -> Self {
+    pub fn with_attestation_config(mut self, config: AttestationConfig) -> Self {
         self.attestation_config = Some(config);
         self
     }

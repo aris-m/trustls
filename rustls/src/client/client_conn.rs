@@ -31,7 +31,7 @@ use crate::unbuffered::{EncryptError, TransmitTlsData};
 use crate::{DistinguishedName, crypto};
 use crate::{compress, sign, verify, versions, AttestationRequest, KeyLog, WantsVersions};
 
-use crate::attestation::{ClientAttestationConfig, AttestationResponse};
+use crate::attestation::AttestationConfig;
 
 /// A trait for the ability to store client session data, so that sessions
 /// can be resumed in future connections.
@@ -285,7 +285,7 @@ pub struct ClientConfig {
     pub(super) ech_mode: Option<EchMode>,
 
     /// TPM attestation configuration including request and verification/generation capabilities
-    pub attestation_config: Option<ClientAttestationConfig>,
+    pub attestation_config: Option<AttestationConfig>,
 }
 
 impl ClientConfig {
@@ -448,7 +448,7 @@ impl ClientConfig {
             .ok_or(Error::FailedToGetCurrentTime)
     }
 
-    pub fn with_attestation_config(mut self, config: ClientAttestationConfig) -> Self {
+    pub fn with_attestation_config(mut self, config: AttestationConfig) -> Self {
         self.attestation_config = Some(config);
         self
     }
@@ -1044,7 +1044,6 @@ impl std::error::Error for EarlyDataError {}
 pub struct ClientConnectionData {
     pub(super) early_data: EarlyData,
     pub(super) ech_status: EchStatus,
-    /// If the client is configured to use TPM attestation, this contains the request
     pub(super) server_attestation_request: Option<AttestationRequest>,
 }
 

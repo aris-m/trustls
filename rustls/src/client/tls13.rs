@@ -505,7 +505,6 @@ impl State<ClientConnectionData> for ExpectEncryptedExtensions {
                         debug!("Server attestation type: {:?}", attestation_response.attestation_type);
                         debug!("Server report length: {}", attestation_response.report.len());
                         
-                        // Verify the server's attestation response if we have a verifier configured
                         if let Some(ref attestation_config) = self.config.attestation_config {
                             if attestation_config.verifier.get_attestation_type() == attestation_response.attestation_type {
                                 let is_valid = attestation_config.verifier.verify_report(
@@ -537,7 +536,6 @@ impl State<ClientConnectionData> for ExpectEncryptedExtensions {
                         debug!("Received attestation request from server for mutual attestation");
                         debug!("Server requested attestation type: {:?}", attestation_request.attestation_type);
                         
-                        // Store the server's request for later use
                         server_attestation_request = Some(attestation_request.clone());
                     } else {
                         return Err(cx.common.send_fatal_alert(
@@ -942,7 +940,6 @@ impl State<ClientConnectionData> for ExpectCertificateRequest {
             })
             .cloned();
 
-        // For TLS 1.3, pass the attestation configuration and server's attestation request
         let client_auth = ClientAuthDetails::resolve(
             self.config
                 .client_auth_cert_resolver
@@ -951,9 +948,7 @@ impl State<ClientConnectionData> for ExpectCertificateRequest {
             &compat_sigschemes,
             Some(certreq.context.0.clone()),
             compat_compressor,
-            // Pass attestation config if available
             self.config.attestation_config.as_ref(),
-            // Pass server's attestation request stored in client connection data
             cx.data.server_attestation_request.as_ref(),
         )?;
 
@@ -1275,13 +1270,11 @@ fn emit_compressed_certificate_tls13(
     debug!("emit_compressed_certificate_tls13 called");
     debug!("  attestation_response present: {}", attestation_response.is_some());
     
-    // Create certificate entries with extensions for compression
     let mut cert_entries = Vec::new();
     
     for (i, cert) in certkey.cert.iter().enumerate() {
         let mut extensions = Vec::new();
         
-        // Add attestation response to the first certificate (end entity)
         if i == 0 {
             if let Some(response) = attestation_response {
                 debug!("Adding attestation response to compressed certificate entry {}", i);
@@ -1324,13 +1317,11 @@ fn emit_certificate_tls13(
         .map(|ck| ck.cert.as_ref())
         .unwrap_or(&[][..]);
     
-    // Create certificate entries with extensions
     let mut cert_entries = Vec::new();
     
     for (i, cert) in certs.iter().enumerate() {
         let mut extensions = Vec::new();
         
-        // Add attestation response to the first certificate (end entity)
         if i == 0 {
             if let Some(response) = attestation_response {
                 extensions.push(CertificateExtension::AttestationResponse(response.clone()));

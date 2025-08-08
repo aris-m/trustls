@@ -720,5 +720,5 @@ pub mod attestation;
 pub use attestation::{
     AttestationType, AttestationRequest, AttestationResponse,
     AttestationReportGenerator, AttestationReportVerifier,
-    ClientAttestationConfig, ServerAttestationConfig,
+    AttestationConfig
 };

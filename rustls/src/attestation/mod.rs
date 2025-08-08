@@ -117,17 +117,10 @@ pub trait AttestationReportVerifier: Debug + Send + Sync {
 }
 
 #[derive(Clone, Debug)]
-pub struct ClientAttestationConfig {
+pub struct AttestationConfig {
     pub request: AttestationRequest,
     pub verifier: Arc<dyn AttestationReportVerifier>,
     pub report_generator: Arc<dyn AttestationReportGenerator>,
-}
-
-#[derive(Clone, Debug)]
-pub struct ServerAttestationConfig {
-    pub request: AttestationRequest,
-    pub report_generator: Arc<dyn AttestationReportGenerator>,
-    pub verifier: Arc<dyn AttestationReportVerifier>,
 }
 
 impl AttestationRequest {

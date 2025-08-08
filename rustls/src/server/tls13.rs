@@ -34,7 +34,7 @@ use crate::tls13::key_schedule::{
 use crate::tls13::{
     Tls13CipherSuite, construct_client_verify_message, construct_server_verify_message,
 };
-use crate::{compress, rand, verify, AttestationResponse, AttestationType, ConnectionTrafficSecrets, ServerAttestationConfig};
+use crate::{compress, rand, verify, AttestationResponse, ConnectionTrafficSecrets};
 
 mod client_hello {
     use super::*;
@@ -1046,15 +1046,13 @@ impl State<ServerConnectionData> for ExpectCertificate {
 
         debug!("Received client certificate message");
 
-        // Extract attestation response from certificate extensions if present
         let mut client_attestation_response: Option<AttestationResponse> = None;
 
         let expects_attestation = self.config.attestation_config.is_some();
         
-        // Look for attestation response in the first certificate entry (end entity)
         if let Some(first_entry) = certp.entries.first() {
             
-            for (i, ext) in first_entry.exts.iter().enumerate() {
+            for ext in first_entry.exts.iter() {
                 match ext {
                     CertificateExtension::AttestationResponse(response) => {
                         debug!("  Client attestation type: {:?}", response.attestation_type);
@@ -1074,13 +1072,11 @@ impl State<ServerConnectionData> for ExpectCertificate {
             debug!("No certificate entries found");
         }
 
-        // If we have an attestation config and received a client attestation response, verify it
         if let (Some(attestation_config), Some(client_response)) = 
             (&self.config.attestation_config, &client_attestation_response) {
             
-            // Check if the attestation type matches what we requested
             if attestation_config.request.attestation_type == client_response.attestation_type {
-                // Verify the client's attestation response using the configured verifier
+                
                 let verification_result = attestation_config.verifier.verify_report(
                     client_response,
                     &attestation_config.request.nonce
@@ -1154,49 +1150,6 @@ impl State<ServerConnectionData> for ExpectCertificate {
 
     fn into_owned(self: Box<Self>) -> hs::NextState<'static> {
         self
-    }
-}
-
-fn verify_client_attestation(
-    response: &AttestationResponse,
-    expected_nonce: &[u8],
-    config: &ServerAttestationConfig,
-) -> Result<bool, Error> {
-    // This is a placeholder implementation
-    // You should implement proper verification logic based on your attestation type
-    
-    match response.attestation_type {
-        AttestationType::TPM => {
-            // Implement TPM-specific verification
-            // For now, we'll do basic nonce verification like in your mock implementation
-            if response.report.len() >= expected_nonce.len() {
-                let report_nonce = &response.report[..expected_nonce.len().min(32)];
-                let verification_result = report_nonce == &expected_nonce[..expected_nonce.len().min(32)];
-                
-                debug!("Client TPM verification result: {}", verification_result);
-                debug!("Report size: {}, Signature size: {}, Cert size: {}", 
-                       response.report.len(), response.signature.len(), response.certificate_chain.len());
-                
-                Ok(verification_result)
-            } else {
-                debug!("Client report too small");
-                Ok(false)
-            }
-        }
-        AttestationType::SGX => {
-            // Implement SGX-specific verification
-            debug!("SGX attestation verification not implemented");
-            Ok(false)
-        }
-        AttestationType::SEV => {
-            // Implement SEV-specific verification
-            debug!("SEV attestation verification not implemented");
-            Ok(false)
-        }
-        _ => {
-            debug!("Attestation type: {:?}", response.attestation_type);
-            Ok(false)
-        }
     }
 }
 
