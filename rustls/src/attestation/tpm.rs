@@ -32,10 +32,10 @@ impl AttestationReportGenerator for TpmReportGenerator {
         AttestationType::TPM
     }
 
-    fn generate_report(&self, nonce: &[u8], pcr_selection: &[u8]) -> Result<AttestationResponse, Error> {
-        debug!("Generating TPM Report");
-
-        let (report, signature, ak_cert) = get_tpm_report(nonce, pcr_selection)?;
+    fn generate_report(&self, pcr_selection: &[u8], linking_hash: &[u8]) -> Result<AttestationResponse, Error> {
+        debug!("Generating TPM Report with linking hash");
+        
+        let (report, signature, ak_cert) = get_tpm_report(linking_hash, pcr_selection)?;
         
         Ok(AttestationResponse::new(
             report,
@@ -54,36 +54,29 @@ impl AttestationReportVerifier for TpmReportVerifier {
         AttestationType::TPM
     }
 
-    fn verify_report(&self, response: &AttestationResponse, expected_nonce: &[u8]) -> Result<bool, Error> {
-        debug!("Verifying TPM report");
-        
-        if response.attestation_type != AttestationType::TPM {
-            return Err(Error::AttestationVerificationFailed(format!(
-                "Attestation type mismatch, expected TPM, got: {:?}",
-                response.attestation_type
-            )));
-        }
+    fn verify_report(&self, response: &AttestationResponse, expected_linking_hash: &[u8]) -> Result<bool, Error> {
+        debug!("Verifying TPM report with linking hash");
         
         let result = verify_tpm_report(
             &response.report, 
             &response.signature, 
             &response.certificate_chain, 
-            expected_nonce
+            expected_linking_hash
         )?;
         
         Ok(result)
     }
 }
 
-pub fn get_tpm_report(nonce: &[u8], pcr_selection: &[u8]) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), Error> {
-    read_with_attestation_key(nonce, pcr_selection)
+pub fn get_tpm_report(linking_hash: &[u8], pcr_selection: &[u8]) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), Error> {
+    read_with_attestation_key(linking_hash, pcr_selection)
         .map_err(|e| {
             error!("TPM attestation failed: {:?}", e);
             Error::AttestationGenerationFailed(format!("TPM attestation failed: {:?}", e))
         })
 }
 
-fn read_with_attestation_key(nonce: &[u8], pcr_selection: &[u8]) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), Error> {
+fn read_with_attestation_key(linking_hash: &[u8], pcr_selection: &[u8]) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), Error> {
     let tcti = TctiNameConf::Swtpm(Default::default());
     let mut ctx = Context::new(tcti)
         .map_err(|e| Error::AttestationGenerationFailed(format!("TPM connection failed: {:?}", e)))?;
@@ -108,8 +101,8 @@ fn read_with_attestation_key(nonce: &[u8], pcr_selection: &[u8]) -> Result<(Vec<
         .build()
         .map_err(|e| Error::AttestationGenerationFailed(format!("PCR selection failed: {:?}", e)))?;
 
-    let qualifying_data = Data::try_from(nonce.to_vec())
-        .map_err(|e| Error::AttestationGenerationFailed(format!("Nonce conversion failed: {:?}", e)))?;
+    let qualifying_data = Data::try_from(linking_hash.to_vec()) 
+        .map_err(|e| Error::AttestationGenerationFailed(format!("Linking hash conversion failed: {:?}", e)))?;
 
     let signature_scheme = SignatureScheme::RsaPss {
         hash_scheme: HashScheme::new(HashingAlgorithm::Sha256),
@@ -137,7 +130,7 @@ fn read_with_attestation_key(nonce: &[u8], pcr_selection: &[u8]) -> Result<(Vec<
         .map_err(|e| Error::AttestationGenerationFailed(format!("Failed to serialize AK public: {:?}", e)))?;
 
     let mut report = Vec::new();
-    report.extend_from_slice(nonce);
+    report.extend_from_slice(linking_hash);
     report.extend_from_slice(&quoted_bytes);
 
     info!("TPM attestation report: {} bytes (quote: {})", report.len(), quoted_bytes.len());
@@ -186,24 +179,30 @@ pub fn verify_tpm_report(
     report: &[u8], 
     signature: &[u8], 
     ak_public_bytes: &[u8],
-    expected_nonce: &[u8]
+    expected_linking_hash: &[u8]
 ) -> Result<bool, Error> {
     debug!("Starting TPM report verification");
+    debug!("Report length: {}", report.len());
+    debug!("Expected linking hash length: {}", expected_linking_hash.len());
     
     if signature.is_empty() || ak_public_bytes.is_empty() || report.is_empty() {
         warn!("Invalid input: empty signature, public key, or report");
         return Ok(false);
     }
     
-    if !verify_nonce(report, expected_nonce)? {
-        warn!("Quote verification failed: nonce mismatch");
+    if !verify_linking_hash(report, expected_linking_hash)? {
+        warn!("Quote verification failed: linking hash mismatch");
         return Ok(false);
     }
-    
-    let (attest, signature_struct, ak_public) = match parse_tpm_structures(report, signature, ak_public_bytes) {
+    let (attest, signature_struct, ak_public) = match parse_tmp_structures(
+        report, 
+        signature, 
+        ak_public_bytes,
+        expected_linking_hash  
+    ) {
         Ok(structures) => structures,
         Err(e) => {
-            warn!("Failed to parse TPM structures (likely tampering): {:?}", e);
+            warn!("Failed to parse TPM structures: {:?}", e);
             return Ok(false);
         }
     };
@@ -213,7 +212,7 @@ pub fn verify_tpm_report(
         return Ok(false);
     }
     
-    if !validate_pcr_digest(&attest, expected_nonce)? {
+    if !validate_pcr_digest(&attest)? { 
         warn!("Quote verification failed: PCR validation failed");
         return Ok(false);
     }
@@ -222,30 +221,30 @@ pub fn verify_tpm_report(
     Ok(true)
 }
 
-fn verify_nonce(report: &[u8], expected_nonce: &[u8]) -> Result<bool, Error> {
-    if report.len() < expected_nonce.len() {
+fn verify_linking_hash(report: &[u8], expected_linking_hash: &[u8]) -> Result<bool, Error> {
+    if report.len() < expected_linking_hash.len() {
         return Ok(false);
     }
     
-    let report_nonce = &report[..expected_nonce.len()];
+    let report_linking_hash = &report[..expected_linking_hash.len()];
     
-    let matches = report_nonce.ct_eq(expected_nonce).into();
+    let matches = report_linking_hash.ct_eq(expected_linking_hash).into();
     
     if matches {
-        debug!("Nonce verification: OK");
+        debug!("Linking hash verification: OK");
     } else {
-        warn!("Nonce verification: FAIL");
+        warn!("Linking hash verification: FAIL");
     }
     Ok(matches)
 }
 
-fn parse_tpm_structures(
+fn parse_tmp_structures(
     report: &[u8], 
     signature: &[u8], 
-    ak_public_bytes: &[u8]
+    ak_public_bytes: &[u8],
+    expected_linking_hash: &[u8]  
 ) -> Result<(Attest, Signature, Public), Error> {
-    let nonce_len = 32;
-    if report.len() <= nonce_len {
+    if report.is_empty() {
         return Err(Error::AttestationVerificationFailed("Report too short".to_string()));
     }
 
@@ -257,7 +256,21 @@ fn parse_tpm_structures(
         return Err(Error::AttestationVerificationFailed("Empty public key".to_string()));
     }
     
-    let quote_data = &report[nonce_len..];
+    let linking_hash_len = expected_linking_hash.len();
+    
+    debug!("Parsing TPM structures:");
+    debug!("  Report length: {}", report.len());
+    debug!("  Linking hash length: {}", linking_hash_len);
+    
+    if report.len() <= linking_hash_len {
+        return Err(Error::AttestationVerificationFailed(
+            format!("Report too short: {} <= {}", report.len(), linking_hash_len)
+        ));
+    }
+    
+    let quote_data = &report[linking_hash_len..];
+    debug!("  Quote data length: {}", quote_data.len());
+    debug!("  Quote data first 16 bytes: {:02x?}", &quote_data[..16.min(quote_data.len())]);
     
     let attest = Attest::unmarshall(quote_data)
         .map_err(|e| Error::AttestationVerificationFailed(format!("Failed to parse attestation: {:?}", e)))?;
@@ -373,7 +386,7 @@ fn extract_signature_bytes(signature: &Signature) -> Result<Vec<u8>, Error> {
     Ok(sig_bytes)
 }
 
-fn validate_pcr_digest(attest: &Attest, expected_nonce: &[u8]) -> Result<bool, Error> {
+fn validate_pcr_digest(attest: &Attest) -> Result<bool, Error> {
     let attested_info = attest.attested();
 
     let quote_info = match attested_info {
@@ -383,12 +396,6 @@ fn validate_pcr_digest(attest: &Attest, expected_nonce: &[u8]) -> Result<bool, E
             return Ok(false);
         }
     };
-
-    let qualifying_data = attest.extra_data();
-    if qualifying_data.as_slice() != expected_nonce {
-        warn!("PCR validation failed: qualifying data mismatch");
-        return Ok(false);
-    }
 
     let pcr_selection = quote_info.pcr_selection();
     if pcr_selection.is_empty() {

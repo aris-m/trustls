@@ -482,6 +482,8 @@ impl State<ClientConnectionData> for ExpectEncryptedExtensions {
     where
         Self: 'm,
     {
+        let transcript_hash = self.transcript.current_hash();
+
         let exts = require_handshake_msg!(
             m,
             HandshakeType::EncryptedExtensions,
@@ -505,24 +507,34 @@ impl State<ClientConnectionData> for ExpectEncryptedExtensions {
                 ServerExtension::AttestationResponse(attestation_response) => {
                     if client_sent_attestation_request {
                         debug!("Received attestation response from server");
-                        debug!("Server attestation type: {:?}", attestation_response.attestation_type);
-                        debug!("Server report length: {}", attestation_response.report.len());
                         
                         if let Some(ref attestation_config) = self.config.attestation_config {
                             if attestation_config.verifier.get_attestation_type() == attestation_response.attestation_type {
-                                let is_valid = attestation_config.verifier.verify_report(
-                                    attestation_response,
-                                    &attestation_config.request.nonce
-                                )?;
-                                
-                                if !is_valid {
-                                    return Err(cx.common.send_fatal_alert(
-                                        AlertDescription::BadCertificate,
-                                        Error::AttestationVerificationFailed("Server quote verification failed".to_string()),
-                                    ));
-                                }
-                                
-                                debug!("Server quote verification successful");
+                                if let Some(ref attestation_config) = self.config.attestation_config {
+                                    if let Some(dhe_secret_bytes) = self.key_schedule.get_dhe_secret() {
+                                        
+                                        let linking_hash = crate::attestation::compute_linking_hash(
+                                            &transcript_hash,
+                                            dhe_secret_bytes,
+                                            &attestation_config.request.nonce,
+                                            self.suite.common.hash_provider,
+                                        );
+                                        
+                                        let is_valid = attestation_config.verifier.verify_report(
+                                            attestation_response,
+                                            linking_hash.as_ref()
+                                        )?;
+                                        
+                                        if !is_valid {
+                                            return Err(cx.common.send_fatal_alert(
+                                                AlertDescription::BadCertificate,
+                                                Error::AttestationVerificationFailed("Server attestation verification failed".to_string()),
+                                            ));
+                                        }
+                                        
+                                        debug!("Server attestation verification successful");
+                                    }
+                                }    
                             } else {
                                 return Err(cx.common.send_fatal_alert(
                                     AlertDescription::BadCertificate,
@@ -899,7 +911,7 @@ impl State<ClientConnectionData> for ExpectCertificateRequest {
     ) -> hs::NextStateOrError<'m>
     where
         Self: 'm,
-    {
+    {   
         let certreq = &require_handshake_msg!(
             m,
             HandshakeType::CertificateRequest,
@@ -907,6 +919,8 @@ impl State<ClientConnectionData> for ExpectCertificateRequest {
         )?;
         self.transcript.add_message(&m);
         debug!("Got CertificateRequest {certreq:?}");
+
+        let transcript_hash = self.transcript.current_hash();
 
         // Fortunately the problems here in TLS1.2 and prior are corrected in
         // TLS1.3.
@@ -946,7 +960,7 @@ impl State<ClientConnectionData> for ExpectCertificateRequest {
             })
             .cloned();
 
-        let client_auth = ClientAuthDetails::resolve(
+         let client_auth = ClientAuthDetails::resolve(
             self.config
                 .client_auth_cert_resolver
                 .as_ref(),
@@ -956,6 +970,9 @@ impl State<ClientConnectionData> for ExpectCertificateRequest {
             compat_compressor,
             self.config.attestation_config.as_ref(),
             cx.data.server_attestation_request.as_ref(),
+            Some(&transcript_hash),                    
+            self.key_schedule.get_dhe_secret(),        
+            Some(self.suite.common.hash_provider),     
         )?;
 
         Ok(if self.offered_cert_compression {

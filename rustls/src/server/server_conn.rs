@@ -19,7 +19,7 @@ use crate::common_state::{Protocol, State};
 use crate::conn::{ConnectionCommon, ConnectionCore, UnbufferedConnectionCommon};
 #[cfg(doc)]
 use crate::crypto;
-use crate::crypto::CryptoProvider;
+use crate::crypto::{hash, CryptoProvider};
 use crate::enums::{CertificateType, CipherSuite, ProtocolVersion, SignatureScheme};
 use crate::error::Error;
 use crate::kernel::KernelConnection;
@@ -36,6 +36,7 @@ use crate::vecbuf::ChunkVecBuffer;
 use crate::{compress, sign, verify, versions, AttestationRequest, DistinguishedName, KeyLog, WantsVersions};
 
 use crate::attestation::AttestationConfig;
+use alloc::format; 
 
 /// A trait for the ability to store server session data.
 ///
@@ -1217,13 +1218,28 @@ impl ConnectionCore<ServerConnectionData> {
 }
 
 /// State associated with a server connection.
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct ServerConnectionData {
     pub(super) sni: Option<DnsName<'static>>,
     pub(super) received_resumption_data: Option<Vec<u8>>,
     pub(super) resumption_data: Vec<u8>,
     pub(super) early_data: EarlyDataState,
     pub(super) client_attestation_request: Option<AttestationRequest>,
+    pub(super) transcript_hash_after_cert_request: Option<hash::Output>,
+}
+
+impl Debug for ServerConnectionData {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerConnectionData")
+            .field("sni", &self.sni)
+            .field("received_resumption_data", &self.received_resumption_data)
+            .field("resumption_data", &self.resumption_data)
+            .field("early_data", &self.early_data)
+            .field("client_attestation_request", &self.client_attestation_request)
+            .field("transcript_hash_after_cert_request", 
+                &self.transcript_hash_after_cert_request.as_ref().map(|h| format!("{:02x?}", &h.as_ref()[..8])))
+            .finish()
+    }
 }
 
 impl ServerConnectionData {

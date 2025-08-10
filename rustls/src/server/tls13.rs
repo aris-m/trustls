@@ -6,6 +6,7 @@ use alloc::vec::Vec;
 use alloc::format; 
 
 pub(super) use client_hello::CompleteClientHelloHandling;
+use log::error;
 use pki_types::{CertificateDer, UnixTime};
 use subtle::ConstantTimeEq;
 
@@ -361,8 +362,11 @@ mod client_hello {
                 cx.common.handshake_kind = Some(HandshakeKind::Resumed);
             }
 
+            let transcript_hash = self.transcript.clone();
+
             let mut ocsp_response = server_key.get_ocsp();
             let mut flight = HandshakeFlightTls13::new(&mut self.transcript);
+            
             let doing_early_data = emit_encrypted_extensions(
                 &mut flight,
                 self.suite,
@@ -372,10 +376,12 @@ mod client_hello {
                 resumedata.as_ref(),
                 self.extra_exts,
                 &self.config,
+                Some(&transcript_hash),
+                Some(&key_schedule),
             )?;
 
             let doing_client_auth = if full_handshake {
-                let client_auth = emit_certificate_req_tls13(&mut flight, &self.config)?;
+                let client_auth = emit_certificate_req_tls13(&mut flight, &self.config, cx)?;
 
                 if let Some(compressor) = cert_compressor {
                     emit_compressed_certificate_tls13(
@@ -677,9 +683,11 @@ mod client_hello {
         resumedata: Option<&persist::ServerSessionValue>,
         extra_exts: Vec<ServerExtension>,
         config: &ServerConfig,
+        transcript: Option<&HandshakeHash>,        
+        key_schedule: Option<&KeyScheduleHandshake>,
     ) -> Result<EarlyDataDecision, Error> {
         let mut ep = hs::ExtensionProcessing::new();
-        ep.process_common(config, cx, ocsp_response, hello, resumedata, extra_exts)?;
+        ep.process_common(config, cx, ocsp_response, hello, resumedata, extra_exts, transcript, key_schedule)?;
 
         let early_data = decide_if_early_data_allowed(cx, hello, resumedata, suite, config);
         if early_data == EarlyDataDecision::Accepted {
@@ -696,6 +704,7 @@ mod client_hello {
     fn emit_certificate_req_tls13(
         flight: &mut HandshakeFlightTls13<'_>,
         config: &ServerConfig,
+        cx: &mut ServerContext<'_>,
     ) -> Result<bool, Error> {
         if !config.verifier.offer_client_auth() {
             return Ok(false);
@@ -733,6 +742,9 @@ mod client_hello {
 
         trace!("Sending CertificateRequest {creq:?}");
         flight.add(creq);
+
+        cx.data.transcript_hash_after_cert_request = Some(flight.transcript.current_hash());
+
         Ok(true)
     }
 
@@ -1080,20 +1092,37 @@ impl State<ServerConnectionData> for ExpectCertificate {
             
             if attestation_config.request.attestation_type == client_response.attestation_type {
                 
-                let verification_result = attestation_config.verifier.verify_report(
-                    client_response,
-                    &attestation_config.request.nonce
-                )?;
-                
-                if !verification_result {
-                    debug!("Client attestation verification FAILED");
-                    return Err(cx.common.send_fatal_alert(
-                        AlertDescription::BadCertificate,
-                        Error::AttestationVerificationFailed("Client quote verification failed".to_string()),
-                    ));
+                if let Some(dhe_secret_bytes) = self.key_schedule.get_dhe_secret() {
+                    let transcript_hash = cx.data.transcript_hash_after_cert_request
+                        .as_ref()
+                        .ok_or_else(|| {
+                            Error::AttestationVerificationFailed(
+                                "No stored transcript hash available for client attestation verification".to_string()
+                            )
+                        })?;
+                    
+                    let linking_hash = crate::attestation::compute_linking_hash(
+                        &transcript_hash,
+                        dhe_secret_bytes,
+                        &attestation_config.request.nonce,
+                        self.suite.common.hash_provider,
+                    );
+                    
+                    let verification_result = attestation_config.verifier.verify_report(
+                        client_response,
+                        linking_hash.as_ref()
+                    )?;
+                    
+                    if !verification_result {
+                        debug!("Client attestation verification FAILED");
+                        return Err(cx.common.send_fatal_alert(
+                            AlertDescription::BadCertificate,
+                            Error::AttestationVerificationFailed("Client quote verification failed".to_string()),
+                        ));
+                    }
+                    
+                    debug!("Client quote verification SUCCESSFUL");
                 }
-                
-                debug!("Client quote verification SUCCESSFUL");
             } else {
                 return Err(cx.common.send_fatal_alert(
                     AlertDescription::BadCertificate,

@@ -1,7 +1,11 @@
+use std::string::ToString;
+
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use log::error;
 
 use super::ResolvesClientCert;
+use crate::crypto::hash;
 use crate::log::{debug, trace};
 use crate::msgs::enums::ExtensionType;
 use crate::msgs::handshake::{CertificateChain, DistinguishedName, ProtocolName, ServerExtension};
@@ -91,6 +95,9 @@ impl ClientAuthDetails {
         compressor: Option<&'static dyn compress::CertCompressor>,
         attestation_config: Option<&AttestationConfig>,
         server_attestation_request: Option<&AttestationRequest>,
+        transcript_hash: Option<&hash::Output>,
+        dhe_secret: Option<&[u8]>,
+        hash_provider: Option<&'static dyn hash::Hash>,
     ) -> Result<Self, Error> {
         let acceptable_issuers = canames
             .unwrap_or_default()
@@ -105,11 +112,29 @@ impl ClientAuthDetails {
                 let attestation_response = if let (Some(config), Some(server_request)) = 
                     (attestation_config, server_attestation_request) {
                     if config.report_generator.get_attestation_type() == server_request.attestation_type {
-                        Some(config.report_generator.generate_report(
-                            &server_request.nonce,
-                            &server_request.data
-                        )?)
+                        
+                        if let (Some(transcript), Some(secret), Some(hash_prov)) = 
+                            (transcript_hash, dhe_secret, hash_provider) {
+                            
+                            let linking_hash = crate::attestation::compute_linking_hash(
+                                transcript,
+                                secret,
+                                &server_request.nonce, 
+                                hash_prov,
+                            );
+                            
+                            Some(config.report_generator.generate_report(
+                                &server_request.data,   
+                                linking_hash.as_ref()    
+                            )?)
+                        } else {
+                            error!("Missing parameters for linking hash computation");
+                            return Err(Error::AttestationGenerationFailed(
+                                "Cannot compute linking hash: missing transcript, DHE secret, or hash provider".to_string()
+                            ));
+                        }
                     } else {
+                        debug!("Server requested different attestation type than client supports");
                         None
                     }
                 } else {

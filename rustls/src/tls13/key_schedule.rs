@@ -2,6 +2,7 @@
 
 use alloc::boxed::Box;
 use alloc::string::ToString;
+use zeroize::Zeroize;
 
 use crate::common_state::{CommonState, Side};
 use crate::crypto::cipher::{AeadKey, Iv, MessageDecrypter, Tls13AeadAlgorithm};
@@ -11,6 +12,7 @@ use crate::error::Error;
 use crate::msgs::message::Message;
 use crate::suites::PartiallyExtractedSecrets;
 use crate::{ConnectionTrafficSecrets, KeyLog, Tls13CipherSuite, quic};
+use alloc::vec::Vec;
 
 /// The kinds of secret we can extract from `KeySchedule`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -192,9 +194,16 @@ impl KeySchedulePreHandshake {
         mut self,
         shared_secret: SharedSecret,
     ) -> KeyScheduleHandshakeStart {
-        self.ks
-            .input_secret(shared_secret.secret_bytes());
-        KeyScheduleHandshakeStart { ks: self.ks }
+        let secret_bytes = shared_secret.secret_bytes();
+        
+        let dhe_secret_bytes = Some(secret_bytes.to_vec());
+        
+        self.ks.input_secret(secret_bytes);
+        
+        KeyScheduleHandshakeStart { 
+            ks: self.ks,
+            dhe_secret_bytes,
+        }
     }
 }
 
@@ -210,6 +219,7 @@ impl From<KeyScheduleEarly> for KeySchedulePreHandshake {
 /// Created by [`KeySchedulePreHandshake`].
 pub(crate) struct KeyScheduleHandshakeStart {
     ks: KeySchedule,
+    dhe_secret_bytes: Option<Vec<u8>>,
 }
 
 impl KeyScheduleHandshakeStart {
@@ -319,6 +329,8 @@ impl KeyScheduleHandshakeStart {
             ks: self.ks,
             client_handshake_traffic_secret: client_secret,
             server_handshake_traffic_secret: server_secret,
+            dhe_secret_bytes: self.dhe_secret_bytes,
+
         }
     }
 }
@@ -327,6 +339,7 @@ pub(crate) struct KeyScheduleHandshake {
     ks: KeySchedule,
     client_handshake_traffic_secret: OkmBlock,
     server_handshake_traffic_secret: OkmBlock,
+    dhe_secret_bytes: Option<Vec<u8>>,
 }
 
 impl KeyScheduleHandshake {
@@ -393,6 +406,7 @@ impl KeyScheduleHandshake {
         KeyScheduleTrafficWithClientFinishedPending {
             handshake_client_traffic_secret: self.client_handshake_traffic_secret,
             traffic,
+            dhe_secret_bytes: self.dhe_secret_bytes,
         }
     }
 
@@ -408,6 +422,17 @@ impl KeyScheduleHandshake {
             .ks
             .sign_finish(&self.client_handshake_traffic_secret, &handshake_hash);
         (KeyScheduleClientBeforeFinished { traffic }, tag)
+    }
+
+    pub(crate) fn get_dhe_secret(&self) -> Option<&[u8]> {
+        self.dhe_secret_bytes.as_deref()
+    }
+    
+    pub(crate) fn clear_dhe_secret(&mut self) {
+        if let Some(ref mut secret) = self.dhe_secret_bytes {
+            secret.zeroize();
+        }
+        self.dhe_secret_bytes = None;
     }
 }
 
@@ -455,6 +480,7 @@ impl KeyScheduleClientBeforeFinished {
 pub(crate) struct KeyScheduleTrafficWithClientFinishedPending {
     handshake_client_traffic_secret: OkmBlock,
     traffic: KeyScheduleTraffic,
+    dhe_secret_bytes: Option<Vec<u8>>, 
 }
 
 impl KeyScheduleTrafficWithClientFinishedPending {
@@ -485,6 +511,17 @@ impl KeyScheduleTrafficWithClientFinishedPending {
         );
 
         (self.traffic, tag)
+    }
+
+    pub(crate) fn get_dhe_secret(&self) -> Option<&[u8]> {
+        self.dhe_secret_bytes.as_deref()
+    }
+    
+    pub(crate) fn clear_dhe_secret(&mut self) {
+        if let Some(ref mut secret) = self.dhe_secret_bytes {
+            secret.zeroize();
+        }
+        self.dhe_secret_bytes = None;
     }
 }
 

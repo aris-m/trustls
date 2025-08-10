@@ -29,6 +29,7 @@ use crate::msgs::persist;
 use crate::server::common::ActiveCertifiedKey;
 use crate::server::{ClientHello, ServerConfig, tls13};
 use crate::sync::Arc;
+use crate::tls13::key_schedule::KeyScheduleHandshake;
 use crate::{SupportedCipherSuite, suites};
 
 pub(super) type NextState<'a> = Box<dyn State<ServerConnectionData> + 'a>;
@@ -77,6 +78,8 @@ impl ExtensionProcessing {
         hello: &ClientHelloPayload,
         resumedata: Option<&persist::ServerSessionValue>,
         extra_exts: Vec<ServerExtension>,
+        transcript: Option<&HandshakeHash>, 
+        key_schedule: Option<&KeyScheduleHandshake>,
     ) -> Result<(), Error> {
         // ALPN
         let our_protocols = &config.alpn_protocols;
@@ -131,32 +134,39 @@ impl ExtensionProcessing {
             }
         }
 
-        let is_mutual_tls = config.verifier.client_auth_mandatory();
-
-        if let Some(attestation_config) = &config.attestation_config {
-            if is_mutual_tls {
+        if let (Some(transcript), Some(ks)) = (transcript, key_schedule) {
+            if let Some(attestation_config) = &config.attestation_config {
                 if let Some(client_request) = hello.get_attestation_request() {
-                    let report = attestation_config.report_generator.generate_report(
-                        &client_request.nonce,
-                        &client_request.data
-                    )?;
+                    if let Some(dhe_secret_bytes) = ks.get_dhe_secret() {
+                        let transcript_hash = transcript.current_hash(); 
+                        
+                        debug!("Server computing linking hash with transcript hash: {:02x?}", &transcript_hash.as_ref()[..8]);
+                        debug!("Server DHE secret (first 8 bytes): {:02x?}", &dhe_secret_bytes[..8.min(dhe_secret_bytes.len())]);
+                        debug!("Server nonce: {:02x?}", &client_request.nonce);
+                        
+                        let linking_hash = crate::attestation::compute_linking_hash(
+                            &transcript_hash,
+                            dhe_secret_bytes,
+                            &client_request.nonce,
+                            config.provider.cipher_suites[0].hash_provider(),
+                        );
+                        
+                        debug!("Server computed linking hash: {:02x?}", &linking_hash.as_ref()[..8]);
+                        
+                        let report = attestation_config.report_generator.generate_report(
+                            &client_request.data,
+                            linking_hash.as_ref()
+                        )?;
 
-                    self.exts.push(ServerExtension::AttestationResponse(report));
+                        self.exts.push(ServerExtension::AttestationResponse(report));
+                    }
                     
                     cx.data.client_attestation_request = Some(client_request.clone());
                 }
                 
-                self.exts.push(ServerExtension::AttestationRequest(attestation_config.request.clone()));
-            } else {
-                if let Some(client_request) = hello.get_attestation_request() {
-                    let report = attestation_config.report_generator.generate_report(
-                        &client_request.nonce,
-                        &client_request.data
-                    )?;
-
-                    self.exts.push(ServerExtension::AttestationResponse(report));
-                    
-                    cx.data.client_attestation_request = Some(client_request.clone());
+                let is_mutual_tls = config.verifier.client_auth_mandatory();
+                if is_mutual_tls {
+                    self.exts.push(ServerExtension::AttestationRequest(attestation_config.request.clone()));
                 }
             }
         }

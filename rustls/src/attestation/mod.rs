@@ -5,6 +5,7 @@ use alloc::string::{String, ToString};
 use alloc::format; 
 use core::fmt::{self, Display, Debug}; 
 use std::sync::Arc;
+use crate::crypto::hash;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AttestationType(pub u32);
@@ -108,12 +109,12 @@ pub struct AttestationResponse {
 
 pub trait AttestationReportGenerator: Debug + Send + Sync {
     fn get_attestation_type(&self) -> AttestationType;
-    fn generate_report(&self, nonce: &[u8], tech_specific_data: &[u8]) -> Result<AttestationResponse, Error>;
+    fn generate_report(&self, tech_specific_data: &[u8], linking_hash: &[u8]) -> Result<AttestationResponse, Error>;
 }
 
 pub trait AttestationReportVerifier: Debug + Send + Sync {
     fn get_attestation_type(&self) -> AttestationType;
-    fn verify_report(&self, response: &AttestationResponse, expected_nonce: &[u8]) -> Result<bool, Error>;
+    fn verify_report(&self, response: &AttestationResponse, expected_linking_hash: &[u8]) -> Result<bool, Error>;
 }
 
 #[derive(Clone, Debug)]
@@ -142,6 +143,23 @@ impl AttestationResponse {
             attestation_type,
         }
     }
+}
+
+pub fn compute_linking_hash(
+    transcript_hash: &hash::Output,
+    shared_secret_bytes: &[u8],
+    attestation_nonce: &[u8],
+    hash_provider: &'static dyn hash::Hash,
+) -> hash::Output {
+    let mut ctx = hash_provider.start();
+    
+    ctx.update(transcript_hash.as_ref());
+    
+    ctx.update(shared_secret_bytes);
+    
+    ctx.update(attestation_nonce);
+    
+    ctx.finish()
 }
 
 impl Codec<'_> for AttestationRequest {

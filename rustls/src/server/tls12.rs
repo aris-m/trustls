@@ -344,7 +344,7 @@ mod client_hello {
         extra_exts: Vec<ServerExtension>,
     ) -> Result<bool, Error> {
         let mut ep = hs::ExtensionProcessing::new();
-        ep.process_common(config, cx, ocsp_response, hello, resumedata, extra_exts)?;
+        ep.process_common(config, cx, ocsp_response, hello, resumedata, extra_exts, None, None)?;
         ep.process_tls12(config, hello, using_ems);
 
         let sh = HandshakeMessagePayload(HandshakePayload::ServerHello(ServerHelloPayload {
