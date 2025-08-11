@@ -427,13 +427,6 @@ impl KeyScheduleHandshake {
     pub(crate) fn get_dhe_secret(&self) -> Option<&[u8]> {
         self.dhe_secret_bytes.as_deref()
     }
-    
-    pub(crate) fn clear_dhe_secret(&mut self) {
-        if let Some(ref mut secret) = self.dhe_secret_bytes {
-            secret.zeroize();
-        }
-        self.dhe_secret_bytes = None;
-    }
 }
 
 pub(crate) struct KeyScheduleClientBeforeFinished {

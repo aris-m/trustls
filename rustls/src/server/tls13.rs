@@ -1107,6 +1107,9 @@ impl State<ServerConnectionData> for ExpectCertificate {
                         &attestation_config.request.nonce,
                         self.suite.common.hash_provider,
                     );
+
+                    self.key_schedule.clear_dhe_secret();
+                    debug!("DHE secret cleared");
                     
                     let verification_result = attestation_config.verifier.verify_report(
                         client_response,
