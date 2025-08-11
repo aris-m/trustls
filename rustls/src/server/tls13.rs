@@ -1049,10 +1049,11 @@ impl State<ServerConnectionData> for ExpectCertificate {
     ) -> hs::NextStateOrError<'m>
     where
         Self: 'm,
-    {
+    {   
         if !self.message_already_in_transcript {
             self.transcript.add_message(&m);
         }
+
         let certp = require_handshake_msg_move!(
             m,
             HandshakeType::Certificate,
@@ -1110,6 +1111,8 @@ impl State<ServerConnectionData> for ExpectCertificate {
 
                     self.key_schedule.clear_dhe_secret();
                     debug!("DHE secret cleared");
+
+                    cx.data.transcript_hash_after_cert_request = None;
                     
                     let verification_result = attestation_config.verifier.verify_report(
                         client_response,

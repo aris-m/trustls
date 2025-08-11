@@ -194,7 +194,7 @@ pub fn verify_tpm_report(
         warn!("Quote verification failed: linking hash mismatch");
         return Ok(false);
     }
-    let (attest, signature_struct, ak_public) = match parse_tmp_structures(
+    let (attest, signature_struct, ak_public) = match parse_tpm_structures(
         report, 
         signature, 
         ak_public_bytes,
@@ -238,7 +238,7 @@ fn verify_linking_hash(report: &[u8], expected_linking_hash: &[u8]) -> Result<bo
     Ok(matches)
 }
 
-fn parse_tmp_structures(
+fn parse_tpm_structures(
     report: &[u8], 
     signature: &[u8], 
     ak_public_bytes: &[u8],
