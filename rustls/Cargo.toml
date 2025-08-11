@@ -50,6 +50,8 @@ zlib-rs = { workspace = true, optional = true }
 tss-esapi = "7"
 sha2 = "0.10"
 rsa = "0.9.8"
+rustls-pemfile = "2.0"
+rand = "0.9.1"
 
 [dev-dependencies]
 base64 = { workspace = true }
@@ -113,6 +115,11 @@ path = "tests/runners/server_cert_verifier.rs"
 [[test]]
 name = "unbuffered"
 path = "tests/runners/unbuffered.rs"
+
+[[test]]
+name = "security_tests"
+path = "tests/runners/security_tests.rs"
+required-features = ["std"]
 
 [package.metadata.docs.rs]
 # all non-default features except fips (cannot build on docs.rs environment)
